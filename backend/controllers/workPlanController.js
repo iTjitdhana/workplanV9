@@ -473,13 +473,73 @@ class WorkPlanController {
       });
     }
   }
+
+  // สร้างงาน Default (ABCD) อัตโนมัติ
+  static async createDefaultTasks(req, res) {
+    try {
+      const { production_date } = req.body;
+      
+      console.log('🆕 Creating default tasks for:', production_date);
+      
+      if (!production_date) {
+        return res.status(400).json({
+          success: false,
+          message: 'กรุณาระบุวันที่ผลิต (production_date)'
+        });
+      }
+      
+      const result = await WorkPlan.createDefaultTasks(production_date);
+      
+      res.json(result);
+      
+    } catch (error) {
+      console.error('❌ Error creating default tasks:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message
+      });
+    }
+  }
+
+  // พิมพ์ใบงานผลิต
+  static async printWorkPlan(req, res) {
+    try {
+      const { production_date } = req.body;
+      
+      console.log('🖨️ Printing work plan for:', production_date);
+      
+      if (!production_date) {
+        return res.status(400).json({
+          success: false,
+          message: 'กรุณาระบุวันที่ผลิต (production_date)'
+        });
+      }
+      
+      const result = await WorkPlan.printWorkPlan(production_date);
+      
+      if (result.success) {
+        res.json(result);
+      } else {
+        res.status(400).json(result);
+      }
+      
+    } catch (error) {
+      console.error('❌ Error printing work plan:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message
+      });
+    }
+  }
 }
 
 // เพิ่ม controller สำหรับ draft
 class DraftWorkPlanController {
   static async getAll(req, res) {
-    const drafts = await DraftWorkPlan.getAll();
-    console.log('📅 Retrieved drafts:', drafts);
+    const { date } = req.query; // ✅ รับ date parameter
+    console.log('📅 Getting drafts for date:', date);
+    const drafts = await DraftWorkPlan.getAll(date); // ส่ง date ไปยัง Model
+    console.log('📅 Retrieved drafts:', drafts.length);
     res.json({ success: true, data: drafts });
   }
   static async getById(req, res) {

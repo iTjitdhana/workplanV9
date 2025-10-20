@@ -44,6 +44,8 @@ router.post('/sync-drafts-to-plans', DraftWorkPlanController.syncDraftsToPlans);
 // Work plan routes
 router.get('/search', WorkPlanController.searchWorkPlans);
 router.get('/', WorkPlanController.getAllWorkPlans);
+router.post('/create-defaults', WorkPlanController.createDefaultTasks); // สร้างงาน ABCD อัตโนมัติ
+router.post('/print', WorkPlanController.printWorkPlan); // พิมพ์ใบงานผลิต
 router.get('/:id', WorkPlanController.getById);
 router.post('/', workPlanValidation, WorkPlanController.create);
 router.put('/:id', workPlanValidation, WorkPlanController.update);

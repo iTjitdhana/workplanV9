@@ -23,15 +23,23 @@ export interface ProductionItem {
   production_date: string;
   job_code: string;
   job_name: string;
+  job_type?: 'default' | 'regular' | 'special'; // ประเภทงาน
+  workflow_status?: 'draft' | 'completed' | 'printed'; // สถานะ workflow
+  is_printed?: boolean | number; // พิมพ์แล้วหรือยัง
   start_time?: string;
   end_time?: string;
   operators: string | string[]; // รองรับทั้ง string และ array
   machine_code?: string;
-  machine_id?: string; // รองรับ property เก่า
+  machine_id?: string | number; // รองรับ property เก่า
+  production_room_id?: string | number; // รองรับ room ID
   room_code?: string;
   production_room?: string; // รองรับ property เก่า
   note?: string;
+  notes?: string; // รองรับ property เก่า
   status: 'draft' | 'active' | 'completed' | 'cancelled';
+  status_id?: number; // สถานะการผลิต ID
+  status_name?: string; // ชื่อสถานะ
+  status_color?: string; // สีของสถานะ
   created_at: string;
   updated_at: string;
   work_plan_id?: string;
@@ -39,7 +47,7 @@ export interface ProductionItem {
   isDraft?: boolean; // รองรับ property เก่า
   is_special?: boolean | number; // รองรับ special jobs (boolean หรือ number)
   is_special_job?: number; // รองรับ special job number
-  workflow_status_id?: number; // รองรับ workflow status ID
+  workflow_status_id?: number; // รองรับ workflow status ID (backward compatibility)
 }
 
 export interface ProductionLog {

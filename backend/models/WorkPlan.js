@@ -15,13 +15,19 @@ class WorkPlan {
           DATE_FORMAT(wp.production_date, '%Y-%m-%d') as production_date,
           wp.job_code,
           wp.job_name,
+          wp.job_type,
+          wp.workflow_status,
+          wp.is_printed,
           wp.start_time,
           wp.end_time,
-          wp.operators,
+          wp.machine_id,
+          wp.production_room_id,
+          wp.notes,
           COALESCE(wp.status_id, 1) as status_id,
           COALESCE(ps.name, 'รอดำเนินการ') as status_name,
           COALESCE(ps.color, '#FF6B6B') as status_color,
-          ff.is_finished
+          ff.is_finished,
+          wp.is_special
         FROM work_plans wp
         LEFT JOIN production_statuses ps ON wp.status_id = ps.id
         LEFT JOIN finished_flags ff ON wp.id = ff.work_plan_id
@@ -77,13 +83,15 @@ class WorkPlan {
         mainQuery += ` WHERE ${conditions.join(' AND ')}`;
       }
       
+      // เรียงลำดับ: default (ABCD) -> regular -> special, แล้วเรียงตามเวลาสร้าง
       mainQuery += ` ORDER BY 
-                 wp.production_date DESC,  -- วันที่ใหม่ไปเก่าก่อน
-                 CASE 
-                   WHEN COALESCE(wp.status_id, 1) = 10 THEN 2  -- งานพิเศษ (status_id = 10) อยู่ล่างสุด
-                   ELSE 1  -- งานปกติอยู่บนสุด
-                 END ASC,
-                 wp.start_time ASC`;
+        CASE wp.job_type
+          WHEN 'default' THEN 1
+          WHEN 'regular' THEN 2
+          WHEN 'special' THEN 3
+          ELSE 4
+        END ASC,
+        wp.id ASC`;
       
       // เพิ่ม pagination
       if (limit && limit > 0) {
@@ -130,8 +138,11 @@ class WorkPlan {
         rows.forEach(row => {
           const operators = operatorsMap.get(row.id);
           if (operators) {
+            row.operators = operators.operators_from_join || ''; // ✅ ใช้ชื่อคอลัมน์ที่ Frontend คาดหวัง
             row.operators_from_join = operators.operators_from_join;
             row.operator_codes = operators.operator_codes;
+          } else {
+            row.operators = ''; // ✅ ไม่มีผู้ปฏิบัติงาน
           }
           
           row.production_room_name = roomsMap.get(row.production_room_id) || null;
@@ -171,7 +182,6 @@ class WorkPlan {
           wp.start_time,
           wp.end_time,
           wp.notes,
-          wp.operators,
           1 as status_id,
           'รอดำเนินการ' as status_name,
           '#FF6B6B' as status_color,
@@ -195,7 +205,7 @@ class WorkPlan {
         params.push(date);
       }
       
-      fallbackQuery += ` GROUP BY wp.id, wp.production_date, wp.job_code, wp.job_name, wp.start_time, wp.end_time, wp.notes, wp.operators, ff.is_finished, ff.updated_at, pr.room_name, m.machine_name
+      fallbackQuery += ` GROUP BY wp.id, wp.production_date, wp.job_code, wp.job_name, wp.start_time, wp.end_time, wp.notes, ff.is_finished, ff.updated_at, pr.room_name, m.machine_name
                          ORDER BY 
                          CASE 
                            WHEN COALESCE(wp.status_id, 1) = 10 THEN 2  -- งานพิเศษ (status_id = 10) อยู่ล่างสุด
@@ -226,7 +236,6 @@ class WorkPlan {
           wp.start_time,
           wp.end_time,
           wp.notes,
-          wp.operators,
           ff.is_finished,
           ff.updated_at as finished_at
         FROM work_plans wp
@@ -255,7 +264,8 @@ class WorkPlan {
       `;
       
       const [operators] = await pool.execute(operatorQuery, [id]);
-      workPlan.operators = operators;
+      // ✅ แปลง operators array เป็น string
+      workPlan.operators = operators.map(op => op.name || op.id_code).filter(Boolean).join(', ');
       
       return workPlan;
     } catch (error) {
@@ -286,13 +296,87 @@ class WorkPlan {
     return timeString;
   }
 
+  // สร้างงาน Default (ABCD) อัตโนมัติ
+  static async createDefaultTasks(production_date) {
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      
+      const formattedDate = formatDateForDatabase(production_date);
+      
+      console.log('🔍 Checking existing default tasks for:', formattedDate);
+      
+      // เช็คว่ามีงาน default แล้วหรือยัง (ป้องกันสร้างซ้ำ)
+      const [existing] = await connection.execute(`
+        SELECT COUNT(*) as count 
+        FROM work_plans 
+        WHERE DATE(production_date) = ? AND job_type = 'default'
+      `, [formattedDate]);
+      
+      if (existing[0].count > 0) {
+        console.log('⚠️ Default tasks already exist. Skip creation.');
+        await connection.commit();
+        return { 
+          success: true, 
+          message: 'Default tasks already exist',
+          created: false,
+          count: existing[0].count
+        };
+      }
+      
+      // สร้างงาน ABCD
+      const defaultTasks = [
+        { code: 'A', name: 'เบิกของส่งสาขา-ผัก' },
+        { code: 'B', name: 'เบิกของส่งสาขา-สด' },
+        { code: 'C', name: 'เบิกของส่งสาขา-แห้ง' },
+        { code: 'D', name: 'ตวงสูตร' }
+      ];
+      
+      const createdIds = [];
+      
+      console.log('🆕 Creating 4 default tasks...');
+      
+      for (const task of defaultTasks) {
+        const [result] = await connection.execute(`
+          INSERT INTO work_plans 
+          (production_date, job_code, job_name, job_type, workflow_status, status_id, is_printed, start_time, end_time)
+          VALUES (?, ?, ?, 'default', 'draft', 1, 0, '08:00:00', '09:00:00')
+        `, [formattedDate, task.code, task.name]);
+        
+        createdIds.push(result.insertId);
+        console.log(`✅ Created: ${task.code} - ${task.name} (ID: ${result.insertId}) - Time: 08:00-09:00`);
+      }
+      
+      await connection.commit();
+      
+      console.log('🎉 Successfully created', createdIds.length, 'default tasks');
+      
+      return { 
+        success: true, 
+        message: 'Default tasks created successfully',
+        created: true,
+        ids: createdIds 
+      };
+      
+    } catch (error) {
+      await connection.rollback();
+      console.error('❌ Error creating default tasks:', error);
+      throw new Error(`Error creating default tasks: ${error.message}`);
+    } finally {
+      connection.release();
+    }
+  }
+
   // Create new work plan
   static async create(workPlanData) {
     const connection = await pool.getConnection();
     try {
       await connection.beginTransaction();
       
-      const { production_date, job_code, job_name, start_time, end_time, notes, operators } = workPlanData;
+      const { 
+        production_date, job_code, job_name, start_time, end_time, notes, operators,
+        workflow_status, machine_id, production_room_id
+      } = workPlanData;
       
       console.log('🗄️ Database insert - production_date:', production_date);
       console.log('🗄️ Database insert - production_date type:', typeof production_date);
@@ -300,6 +384,18 @@ class WorkPlan {
       // แปลงวันที่ให้เป็นรูปแบบที่ถูกต้อง
       let formattedDate = formatDateForDatabase(production_date);
       console.log('🗄️ Formatted date for database:', formattedDate);
+      
+      // เช็คว่าพิมพ์ใบงานไปแล้วหรือยัง
+      const [syncLog] = await connection.execute(`
+        SELECT COUNT(*) as count 
+        FROM workplan_sync_log 
+        WHERE DATE(production_date) = ?
+      `, [formattedDate]);
+      
+      const isPrinted = syncLog[0].count > 0;
+      const job_type = isPrinted ? 'special' : 'regular';
+      
+      console.log('🖨️ Is printed?', isPrinted, '-> job_type:', job_type);
       
       // Format times
       const formattedStartTime = this.formatTime(start_time);
@@ -310,15 +406,30 @@ class WorkPlan {
       
       // Insert work plan
       const insertQuery = `
-        INSERT INTO work_plans (production_date, job_code, job_name, start_time, end_time, notes, operators)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO work_plans 
+        (production_date, job_code, job_name, job_type, workflow_status, 
+         start_time, end_time, machine_id, production_room_id, notes, 
+         status_id, is_printed, operators)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?)
       `;
       
       const [result] = await connection.execute(insertQuery, [
-        formattedDate, job_code, job_name, formattedStartTime, formattedEndTime, notes || null, operators ? JSON.stringify(operators) : null
+        formattedDate,
+        job_code,
+        job_name,
+        job_type,
+        workflow_status || 'draft',
+        formattedStartTime || null,
+        formattedEndTime || null,
+        machine_id || null,
+        production_room_id || null,
+        notes || null,
+        operators ? JSON.stringify(operators) : '[]'
       ]);
       
       const workPlanId = result.insertId;
+      
+      console.log('✅ Work plan created with ID:', workPlanId);
       
       // Insert operators if provided
       if (operators && operators.length > 0) {
@@ -334,12 +445,15 @@ class WorkPlan {
             operator.id_code || null
           ]);
         }
+        
+        console.log('👥 Inserted', operators.length, 'operators');
       }
       
       await connection.commit();
-      return { id: workPlanId, ...workPlanData };
+      return { id: workPlanId, ...workPlanData, job_type, workflow_status: workflow_status || 'draft' };
     } catch (error) {
       await connection.rollback();
+      console.error('❌ Error creating work plan:', error);
       throw new Error(`Error creating work plan: ${error.message}`);
     } finally {
       connection.release();
@@ -352,10 +466,15 @@ class WorkPlan {
     try {
       await connection.beginTransaction();
       
-      const { production_date, job_code, job_name, start_time, end_time, notes, operators } = workPlanData;
+      const { 
+        production_date, job_code, job_name, start_time, end_time, notes, operators,
+        workflow_status, machine_id, production_room_id
+      } = workPlanData;
+      
+      console.log('🔄 Updating work plan:', id, 'with workflow_status:', workflow_status);
       
       // แปลงวันที่ให้เป็นรูปแบบที่ถูกต้อง
-      let formattedDate = formatDateForDatabase(production_date);
+      let formattedDate = production_date ? formatDateForDatabase(production_date) : null;
       
       // Format times
       const formattedStartTime = this.formatTime(start_time);
@@ -364,21 +483,45 @@ class WorkPlan {
       // Update work plan
       const updateQuery = `
         UPDATE work_plans 
-        SET production_date = ?, job_code = ?, job_name = ?, start_time = ?, end_time = ?, notes = ?, operators = ?
+        SET 
+          production_date = COALESCE(?, production_date),
+          job_code = COALESCE(?, job_code),
+          job_name = COALESCE(?, job_name),
+          start_time = ?,
+          end_time = ?,
+          machine_id = ?,
+          production_room_id = ?,
+          notes = ?,
+          workflow_status = COALESCE(?, workflow_status),
+          operators = ?
         WHERE id = ?
       `;
       
       await connection.execute(updateQuery, [
-        formattedDate, job_code, job_name, formattedStartTime, formattedEndTime, notes || null, operators ? JSON.stringify(operators) : null, id
+        formattedDate,
+        job_code,
+        job_name,
+        formattedStartTime || null,
+        formattedEndTime || null,
+        machine_id || null,
+        production_room_id || null,
+        notes || null,
+        workflow_status,
+        operators ? JSON.stringify(operators) : null,
+        id
       ]);
+      
+      console.log('✅ Updated work plan basic info');
       
       // Update operators
       if (operators !== undefined) {
         // Delete existing operators
         await connection.execute('DELETE FROM work_plan_operators WHERE work_plan_id = ?', [id]);
         
+        console.log('🗑️ Deleted old operators');
+        
         // Insert new operators
-        if (operators.length > 0) {
+        if (operators && operators.length > 0) {
           const operatorQuery = `
             INSERT INTO work_plan_operators (work_plan_id, user_id, id_code)
             VALUES (?, ?, ?)
@@ -391,13 +534,19 @@ class WorkPlan {
               operator.id_code || null
             ]);
           }
+          
+          console.log('👥 Inserted', operators.length, 'new operators');
         }
       }
       
       await connection.commit();
+      
+      console.log('🎉 Work plan updated successfully');
+      
       return { id, ...workPlanData };
     } catch (error) {
       await connection.rollback();
+      console.error('❌ Error updating work plan:', error);
       throw new Error(`Error updating work plan: ${error.message}`);
     } finally {
       connection.release();
@@ -490,12 +639,80 @@ class WorkPlan {
   static async findById(id) {
     return this.getById(id);
   }
+
+  // พิมพ์ใบงานผลิต
+  static async printWorkPlan(production_date) {
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      
+      const formattedDate = formatDateForDatabase(production_date);
+      
+      console.log('🖨️ Printing work plan for:', formattedDate);
+      
+      // เช็คว่ามีงาน draft อยู่ไหม (regular เท่านั้น ไม่รวม default)
+      const [draftCheck] = await connection.execute(`
+        SELECT COUNT(*) as count
+        FROM work_plans
+        WHERE DATE(production_date) = ? 
+          AND job_type = 'regular' 
+          AND workflow_status = 'draft'
+      `, [formattedDate]);
+      
+      if (draftCheck[0].count > 0) {
+        console.log('⚠️ Found', draftCheck[0].count, 'draft tasks');
+        await connection.rollback();
+        return {
+          success: false,
+          message: 'กรุณาบันทึกงานให้เสร็จสิ้นทุกงานก่อนพิมพ์',
+          draftCount: draftCheck[0].count
+        };
+      }
+      
+      // อัพเดทสถานะเป็น "พิมพ์แล้ว"
+      const [updateResult] = await connection.execute(`
+        UPDATE work_plans 
+        SET 
+          workflow_status = 'printed',
+          is_printed = 1
+        WHERE DATE(production_date) = ? 
+          AND workflow_status IN ('draft', 'completed')
+      `, [formattedDate]);
+      
+      console.log('✅ Updated', updateResult.affectedRows, 'work plans to printed');
+      
+      // บันทึก log การพิมพ์
+      await connection.execute(`
+        INSERT INTO workplan_sync_log (production_date, synced_at)
+        VALUES (?, NOW())
+      `, [formattedDate]);
+      
+      console.log('📝 Logged print action');
+      
+      await connection.commit();
+      
+      console.log('🎉 Print successful!');
+      
+      return { 
+        success: true, 
+        message: 'พิมพ์ใบงานสำเร็จ',
+        updated: updateResult.affectedRows
+      };
+      
+    } catch (error) {
+      await connection.rollback();
+      console.error('❌ Error printing work plan:', error);
+      throw new Error(`Error printing work plan: ${error.message}`);
+    } finally {
+      connection.release();
+    }
+  }
 }
 
 // เพิ่ม model สำหรับ work_plan_drafts
 class DraftWorkPlan {
-  static async getAll() {
-    const [rows] = await pool.execute(`
+  static async getAll(date = null) {
+    let query = `
       SELECT 
         wd.*,
         DATE_FORMAT(wd.production_date, "%Y-%m-%d") as production_date,
@@ -504,8 +721,19 @@ class DraftWorkPlan {
       FROM work_plan_drafts wd
       LEFT JOIN production_rooms pr ON wd.production_room_id = pr.id
       LEFT JOIN machines m ON wd.machine_id = m.id
-      ORDER BY wd.production_date DESC, wd.id DESC
-    `);
+    `;
+    
+    const params = [];
+    
+    // ✅ กรองตามวันที่ถ้ามี
+    if (date) {
+      query += ' WHERE DATE(wd.production_date) = ?';
+      params.push(date);
+    }
+    
+    query += ' ORDER BY wd.production_date DESC, wd.id DESC';
+    
+    const [rows] = await pool.execute(query, params);
     return rows;
   }
   static async getById(id) {

@@ -13,7 +13,7 @@ require('dotenv').config({ path: `./${envFile}` });
 const responseMonitoring = require('./middleware/responseMonitoring');
 
 const app = express();
-const PORT = process.env.PORT || 3101;
+const PORT = process.env.PORT || 3102;
 
 // Debug logging
 console.log('🚀 Starting Backend Server...');

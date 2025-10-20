@@ -244,6 +244,14 @@ export default function MedicalAppointmentDashboard() {
       loadAllProductionData();
   }, []);
 
+  // ดึงข้อมูลใหม่เมื่อเปลี่ยนวันที่
+  useEffect(() => {
+    if (selectedDate && isClient) {
+      debugLog('📅 วันที่เปลี่ยนเป็น:', selectedDate);
+      loadAllProductionData();
+    }
+  }, [selectedDate, isClient]);
+
   // ===== HELPER FUNCTIONS AFTER HOOKS =====
   // Helper function for API URL - use frontend proxy (relative path)
   const getApiUrl = (endpoint: string) => {
@@ -572,24 +580,9 @@ export default function MedicalAppointmentDashboard() {
     // งาน draft (isDraft = true, ไม่ใช่ default)
     const draftJobs = dayData.filter(item => !defaultCodes.includes(item.job_code) && isDraftItem(item));
 
-    // ฟังก์ชันเรียงตามเวลา/คน (ปรับปรุงให้ robust)
+    // ฟังก์ชันเรียงตาม id อย่างเดียว (เก่าสุดก่อน)
     const sortFn = (a: any, b: any) => {
-      const timeA = String(a.start_time || "00:00");
-      const timeB = String(b.start_time || "00:00");
-      const timeComparison = timeA.localeCompare(timeB);
-      if (timeComparison !== 0) return timeComparison;
-      
-      // ป้องกัน error โดยใช้ getOperatorsArray และ String()
-      const operatorsA = getOperatorsArray(a.operators);
-      const operatorsB = getOperatorsArray(b.operators);
-      const operatorA = String(operatorsA[0] || "");
-      const operatorB = String(operatorsB[0] || "");
-      
-      const indexA = operatorA.indexOf("อ");
-      const indexB = operatorB.indexOf("อ");
-      if (indexA === 0 && indexB !== 0) return -1;
-      if (indexB === 0 && indexA !== 0) return 1;
-      return operatorA.localeCompare(operatorB);
+      return (Number(a.id) || 0) - (Number(b.id) || 0);
     };
     
     normalJobs.sort(sortFn);
@@ -1273,8 +1266,73 @@ export default function MedicalAppointmentDashboard() {
     setIsSubmitting(false);
   };
 
-  // เพิ่มฟังก์ชัน Sync Drafts
+  // ฟังก์ชันพิมพ์ใบงาน
+  const handlePrintWorkPlan = async () => {
+    setIsSubmitting(true);
+    setMessage("");
+    
+    try {
+      // เช็คว่ามีงาน regular ที่ยังเป็น draft อยู่ไหม
+      const regularDrafts = productionData.filter((item: any) => 
+        item.job_type === 'regular' && item.workflow_status === 'draft'
+      );
+      
+      if (regularDrafts.length > 0) {
+        setMessage(`กรุณาบันทึกงานให้เสร็จสิ้นทุกงานก่อนพิมพ์ (เหลืออีก ${regularDrafts.length} งาน)`);
+        setIsSubmitting(false);
+        return;
+      }
+      
+      // ยืนยันการพิมพ์
+      const confirmed = confirm(
+        'คุณต้องการพิมพ์ใบงานผลิตใช่หรือไม่?\n' +
+        'หลังจากพิมพ์แล้ว งานที่เพิ่มใหม่จะกลายเป็น "งานพิเศษ"'
+      );
+      
+      if (!confirmed) {
+        setIsSubmitting(false);
+        return;
+      }
+      
+      debugLog('🖨️ Printing work plan for:', selectedDate);
+      
+      const response = await fetch(getApiUrl('/api/work-plans/print'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ production_date: selectedDate })
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        setMessage('พิมพ์ใบงานสำเร็จ');
+        setSuccessDialogMessage('พิมพ์ใบงานสำเร็จ');
+        setShowSuccessDialog(true);
+        
+        // รีโหลดข้อมูล
+        await loadAllProductionData();
+        
+        // เปิด Google Sheet
+        window.open("https://docs.google.com/spreadsheets/d/1lzsYNoIbTd1Uy5r37xUtK5PuOHyNlYYiqS7xZvrU8C8", "_blank");
+      } else {
+        setMessage(data.message || 'เกิดข้อผิดพลาด');
+      }
+    } catch (err) {
+      debugError('Error printing work plan:', err);
+      setMessage('เกิดข้อผิดพลาดในการเชื่อมต่อ API');
+    }
+    
+    setIsSubmitting(false);
+  };
+
+  // เพิ่มฟังก์ชัน Sync Drafts (เก็บไว้สำหรับ backward compatibility)
   const handleSyncDrafts = async () => {
+    // เรียกใช้ handlePrintWorkPlan แทน
+    await handlePrintWorkPlan();
+  };
+
+  // ฟังก์ชัน Sync Drafts เดิม (สำหรับ backward compatibility)
+  const handleSyncDraftsOld = async () => {
     // เปิด Google Sheet ก่อน
     debugLog("🟢 [DEBUG] กำลังเปิด Google Sheet...");
     try {
@@ -1327,26 +1385,14 @@ export default function MedicalAppointmentDashboard() {
         (item.is_special === 1 || item.workflow_status_id === 10) // งานพิเศษ
       );
       
-      // เรียงงานปกติตาม logic หน้าเว็บ
+      // เรียงงานปกติตาม id อย่างเดียว (เก่าสุดก่อน)
       const sortedNormalJobs = normalJobs.sort((a, b) => {
-        const timeA = a.start_time || "00:00";
-        const timeB = b.start_time || "00:00";
-        const timeComparison = timeA.localeCompare(timeB);
-        if (timeComparison !== 0) return timeComparison;
-        const operatorA = String(getOperatorsArray(a.operators)[0] || "");
-        const operatorB = String(getOperatorsArray(b.operators)[0] || "");
-        const indexA = operatorA.indexOf("อ");
-        const indexB = operatorB.indexOf("อ");
-        if (indexA === 0 && indexB !== 0) return -1;
-        if (indexB === 0 && indexA !== 0) return 1;
-        return operatorA.localeCompare(operatorB);
+        return (Number(a.id) || 0) - (Number(b.id) || 0);
       });
       
-      // เรียงงานพิเศษตามเวลา
+      // เรียงงานพิเศษตาม id อย่างเดียว (เก่าสุดก่อน)
       const sortedSpecialJobs = specialJobs.sort((a, b) => {
-        const timeA = a.start_time || "00:00";
-        const timeB = b.start_time || "00:00";
-        return timeA.localeCompare(timeB);
+        return (Number(a.id) || 0) - (Number(b.id) || 0);
       });
       
       // Debug: แสดงข้อมูลการแยกงาน
@@ -1594,7 +1640,7 @@ export default function MedicalAppointmentDashboard() {
     setMessage("");
     
     try {
-          const url = `http://192.168.0.94:3101/api/work-plans/${workPlanId}/cancel`;
+          const url = getApiUrl(`/api/work-plans/${workPlanId}/cancel`);
     debugLog('🔴 [DEBUG] Making PATCH request to:', url);
     
     const res = await fetch(url, {
@@ -1896,7 +1942,7 @@ export default function MedicalAppointmentDashboard() {
       setIsLoadingMore(true);
       const nextPage = currentPage + 1;
       
-      const response = await fetch(getApiUrl(`/api/work-plans?page=${nextPage}&limit=100`));
+      const response = await fetch(getApiUrl(`/api/work-plans?date=${selectedDate}&page=${nextPage}&limit=100`));
       const data = await response.json();
       
       if (data.success && data.data) {
@@ -1923,15 +1969,27 @@ export default function MedicalAppointmentDashboard() {
   const loadAllProductionData = async () => {
     try {
       setIsLoadingData(true);
-      // if (selectedDate) {
-      //   await syncWorkOrder(selectedDate);
-      // }
+      
+      // สร้างงาน Default (ABCD) อัตโนมัติถ้ายังไม่มี
+      if (selectedDate) {
+        try {
+          await fetch(getApiUrl('/api/work-plans/create-defaults'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ production_date: selectedDate })
+          });
+          debugLog('✅ Default tasks checked/created for:', selectedDate);
+        } catch (err) {
+          debugError('⚠️ Error creating default tasks:', err);
+        }
+      }
+      
       // โหลดข้อมูลสำหรับ weekly view (ไม่จำกัด limit)
-      debugLog('📅 Loading data for weekly view...');
-      const [plans, drafts] = await Promise.all([
-        fetch(getApiUrl(`/api/work-plans?limit=1000`)).then(res => res.json()), // เพิ่ม limit สำหรับ weekly
-        fetch(getApiUrl('/api/work-plans/drafts')).then(res => res.json())
-      ]);
+      debugLog('📅 Loading data for date:', selectedDate);
+      
+      // เรียก API เดียว (ไม่ต้องแยก drafts แล้ว)
+      const plansResponse = await fetch(getApiUrl(`/api/work-plans?date=${selectedDate}&limit=1000`));
+      const plans = await plansResponse.json();
       
       debugLog('📊 Loaded plans for selected date:', plans.data?.length || 0);
       
@@ -1947,7 +2005,7 @@ export default function MedicalAppointmentDashboard() {
         loadHistoricalData(selectedDate);
       }, 100);
       
-      // ดึงสถานะจาก logs สำหรับ work plans ที่ sync แล้ว
+      // ดึงสถานะจาก logs สำหรับ work plans
       const workPlanIds = (plans.data || []).map((p: any) => p.id).filter(Boolean);
       let logsStatusMap: { [key: number]: any } = {};
       
@@ -1967,120 +2025,61 @@ export default function MedicalAppointmentDashboard() {
           debugError('Error fetching logs status:', error);
         }
       }
-      // สร้าง map สำหรับ lookup draft ตาม job_code+job_name+production_date
-      const draftMap = new Map();
-      (drafts.data || []).forEach((d: any) => {
-        const key = `${d.production_date}__${d.job_code}__${d.job_name}`;
-        draftMap.set(key, d);
+      // ประมวลผลข้อมูล work plans
+      let allData = (plans.data || []).map((p: any) => {
+        // กำหนดสถานะตาม workflow_status
+        let recordStatus = 'แบบร่าง';
+        let isPrintedFlag = false;
+        
+        if (p.workflow_status === 'draft') {
+          recordStatus = 'แบบร่าง';
+        } else if (p.workflow_status === 'completed') {
+          recordStatus = 'บันทึกเสร็จสิ้น';
+        } else if (p.workflow_status === 'printed') {
+          recordStatus = 'พิมพ์แล้ว';
+          isPrintedFlag = true;
+        }
+        
+        // กำหนด isDraft ตาม workflow_status
+        const isDraft = p.workflow_status === 'draft';
+        
+        // ใช้สถานะจาก logs ถ้ามี
+        const logsStatus = logsStatusMap[p.id];
+        let status = p.status_name || 'รอดำเนินการ';
+        let status_name = p.status_name || 'รอดำเนินการ';
+        
+        debugLog(`[DEBUG] Work plan ${p.id} logs status:`, logsStatus);
+        debugLog(`[DEBUG] Work plan ${p.id} workflow_status:`, p.workflow_status);
+        debugLog(`[DEBUG] Work plan ${p.id} job_type:`, p.job_type);
+        
+        // ตรวจสอบ status_id จากฐานข้อมูล
+        if (p.status_id === 9) {
+          status = 'ยกเลิกการผลิต';
+          status_name = 'ยกเลิกการผลิต';
+        } else if (logsStatus) {
+          status = logsStatus.message;
+          status_name = logsStatus.message;
+        }
+        
+        // Parse operators (Backend ส่งมาเป็น string แล้ว)
+        let operatorNames = p.operators || '';
+        
+        return {
+          ...p,
+          isDraft: isDraft,
+          status: status,
+          status_name: status_name,
+          recordStatus: recordStatus,
+          isPrinted: isPrintedFlag,
+          operators: operatorNames,
+          production_room: p.production_room_name || 'ไม่ระบุ',
+          machine_id: p.machine_id || '',
+          notes: p.notes || '',
+          // รักษา backward compatibility
+          is_special: p.job_type === 'special' ? 1 : 0,
+          workflow_status_id: p.workflow_status === 'draft' ? 1 : p.workflow_status === 'completed' ? 2 : 3,
+        };
       });
-      let allData = [
-        ...(drafts.data || []).map((d: any) => {
-          // Parse operators จาก JSON string
-          let operatorNames = '';
-          try {
-            if (d.operators) {
-              const operators = typeof d.operators === 'string' ? JSON.parse(d.operators) : d.operators;
-              if (Array.isArray(operators)) {
-                operatorNames = operators.map((o: any) => o.name || o).join(', ');
-              }
-            }
-          } catch (e) {
-            operatorNames = '';
-          }
-          let status = 'แบบร่าง';
-          let recordStatus = 'แบบร่าง';
-          let isPrinted = false;
-          if (d.workflow_status_id === 2) {
-            status = 'บันทึกเสร็จสิ้น';
-            recordStatus = 'บันทึกเสร็จสิ้น';
-            isPrinted = false; // งานที่บันทึกเสร็จสิ้นยังไม่ถือว่าพิมพ์แล้ว
-          } else if (d.workflow_status_id === 1) {
-            status = 'แบบร่าง';
-            recordStatus = 'แบบร่าง';
-          }
-          return {
-            ...d,
-            id: `draft_${d.id}`,
-            isDraft: true,
-            production_date: d.production_date,
-            job_name: d.job_name,
-            start_time: d.start_time,
-            end_time: d.end_time,
-            operators: operatorNames,
-            status: status,
-            recordStatus: recordStatus,
-            isPrinted: isPrinted,
-            production_room: d.production_room_name || d.production_room_id || d.production_room || 'ไม่ระบุ',
-            machine_id: d.machine_id || '',
-            notes: d.notes || '',
-          };
-        }),
-        ...(plans.data || []).map((p: any) => {
-          // Workaround: หา draft ที่ตรงกันมาเติมข้อมูลห้อง/เครื่อง/หมายเหตุ
-          const key = `${p.production_date}__${p.job_code}__${p.job_name}`;
-          const draft = draftMap.get(key);
-          
-          // ใช้สถานะจาก logs ถ้ามี
-          const logsStatus = logsStatusMap[p.id];
-          let status = 'รอดำเนินการ';
-          let status_name = 'รอดำเนินการ';
-          
-          debugLog(`[DEBUG] Work plan ${p.id} logs status:`, logsStatus);
-          debugLog(`[DEBUG] Work plan ${p.id} status_id:`, p.status_id);
-          
-          // ตรวจสอบ status_id จากฐานข้อมูลก่อน
-          if (p.status_id === 9) {
-            status = 'ยกเลิกการผลิต';
-            status_name = 'ยกเลิกการผลิต';
-            debugLog(`[DEBUG] Work plan ${p.id} is cancelled (status_id: 9)`);
-          } else if (logsStatus) {
-            status = logsStatus.message;
-            status_name = logsStatus.message;
-            debugLog(`[DEBUG] Using logs status for work plan ${p.id}: ${status}`);
-          } else {
-            status = p.status === 'แผนจริง' || !p.status ? 'บันทึกสำเร็จ' : p.status;
-            status_name = p.status === 'แผนจริง' || !p.status ? 'บันทึกสำเร็จ' : p.status;
-            debugLog(`[DEBUG] Using default status for work plan ${p.id}: ${status}`);
-          }
-          
-          // Parse operators จาก draft หรือจาก work plan
-          let operatorNames = '';
-          try {
-            if (draft && draft.operators) {
-              // ใช้ operators จาก draft ก่อน
-              const operators = typeof draft.operators === 'string' ? JSON.parse(draft.operators) : draft.operators;
-              if (Array.isArray(operators)) {
-                operatorNames = operators.map((o: any) => o.name || o).join(', ');
-              }
-            } else if (p.operators) {
-              // ใช้ operators จาก work plan
-              const operators = typeof p.operators === 'string' ? JSON.parse(p.operators) : p.operators;
-              if (Array.isArray(operators)) {
-                operatorNames = operators.map((o: any) => o.name || o).join(', ');
-              }
-            }
-          } catch (e) {
-            debugError('Error parsing operators for work plan', p.id, e);
-            operatorNames = '';
-          }
-          
-          return {
-            ...p,
-            isDraft: false,
-            status: status,
-            status_name: status_name,
-            recordStatus: p.recordStatus === 'แผนจริง' || !p.recordStatus ? 'บันทึกสำเร็จ' : p.recordStatus,
-            isPrinted: true, // งานที่ sync แล้วถือว่าพิมพ์แล้ว
-            operators: operatorNames, // เพิ่ม operators ที่ parse แล้ว
-            production_room: (draft && (draft.production_room_name || draft.production_room_id || draft.production_room)) || p.production_room_name || p.production_room_id || p.production_room || 'ไม่ระบุ',
-            machine_id: (draft && draft.machine_id) || p.machine_id || '',
-            notes: (draft && draft.notes) || p.notes || '',
-            // เพิ่มข้อมูลสำหรับการแยกงานพิเศษ
-            is_special: p.status_id === 10 ? 1 : 0, // งานพิเศษถ้า status_id = 10
-            workflow_status_id: p.status_id || 1, // ใช้ status_id เป็น workflow_status_id
-          };
-        })
-      ];
              setProductionData(allData);
        debugLog('📊 [DEBUG] All production data loaded:', allData.length, 'items');
        debugLog('📊 [DEBUG] Sample data:', allData.slice(0, 3));
@@ -2660,24 +2659,30 @@ export default function MedicalAppointmentDashboard() {
 
   // ฟังก์ชันจัดการสถานะงาน
   const getJobStatus = (item: any) => {
-    // งานที่มี workflow_status_id = 2 (บันทึกเสร็จสิ้น) ควรแสดงเป็น "บันทึกเสร็จสิ้น"
-    if (item.workflow_status_id === 2 || item.workflow_status_id === "2") {
+    // ใช้ workflow_status จาก Backend
+    if (item.workflow_status === 'draft') {
+      return "แบบร่าง";
+    }
+    
+    if (item.workflow_status === 'completed') {
       return "บันทึกเสร็จสิ้น";
     }
     
-    // งานที่มี workflow_status_id = 1 (แบบร่าง) ควรแสดงเป็น "แบบร่าง"
+    if (item.workflow_status === 'printed') {
+      return "พิมพ์แล้ว";
+    }
+    
+    // Backward compatibility: ตรวจสอบ workflow_status_id เดิม
     if (item.workflow_status_id === 1 || item.workflow_status_id === "1") {
       return "แบบร่าง";
     }
     
-    // งานพิเศษที่มี status_id = 10 และ "บันทึกเสร็จสิ้น"
-    if ((item.status_id === 10 || item.status_id === "10") && 
-        (item.recordStatus === "บันทึกเสร็จสิ้น" || item.recordStatus === "เสร็จสิ้น" || item.recordStatus === "บันทึกสำเร็จ")) {
-      return "พิมพ์แล้ว";
+    if (item.workflow_status_id === 2 || item.workflow_status_id === "2") {
+      return "บันทึกเสร็จสิ้น";
     }
     
-    // งานที่มี recordStatus เป็น "บันทึกสำเร็จ" ควรเป็น "พิมพ์แล้ว"
-    if (item.recordStatus === "บันทึกสำเร็จ") {
+    // ตรวจสอบ recordStatus เดิม
+    if (item.recordStatus === "พิมพ์แล้ว" || item.recordStatus === "บันทึกสำเร็จ") {
       return "พิมพ์แล้ว";
     }
     
@@ -2697,8 +2702,13 @@ export default function MedicalAppointmentDashboard() {
 
   // ฟังก์ชันตรวจสอบว่าควรแสดง label "งานพิเศษ" หรือไม่
   const shouldShowSpecialJobLabel = (item: any) => {
-    // แสดง label "งานพิเศษ" ทุกครั้งที่ status_id เป็น 10
-    return (item.status_id === 10 || item.status_id === "10");
+    // แสดง label "งานพิเศษ" เมื่อ job_type เป็น 'special'
+    if (item.job_type === 'special') {
+      return true;
+    }
+    
+    // Backward compatibility: ตรวจสอบ status_id = 10 หรือ is_special = 1
+    return (item.status_id === 10 || item.status_id === "10" || item.is_special === 1);
   };
 
   return (
@@ -3925,7 +3935,7 @@ export default function MedicalAppointmentDashboard() {
           <DialogFooter className="flex justify-between">
             {/* แสดงปุ่มลบเฉพาะแบบร่างเท่านั้น */}
             {(() => {
-              const shouldShowDelete = editDraftData && (editDraftData.isDraft || editDraftData.id?.startsWith('draft_'));
+              const shouldShowDelete = editDraftData && (editDraftData.isDraft || (typeof editDraftData.id === 'string' && editDraftData.id.startsWith('draft_')));
               return shouldShowDelete ? (
                 <Button 
                   variant="destructive" 
