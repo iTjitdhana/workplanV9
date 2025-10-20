@@ -39,6 +39,7 @@ import { SimpleDatePicker } from "./components/SimpleDatePicker";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { TableSkeletonLoader, CardSkeletonLoader } from "@/components/SkeletonLoader";
 import { WeeklyCalendar } from "@/components/WeeklyCalendar";
+import { TimeTablePopup } from "@/components/TimeTablePopup";
 import { ProductionTask } from "@/lib/types/weekly-calendar";
 import { arrayMove } from "@dnd-kit/sortable";
 import { createSafeDate, formatDateForDisplay, formatDateForAPI, formatDateThaiShort } from "@/lib/dateUtils";
@@ -3971,8 +3972,17 @@ export default function MedicalAppointmentDashboard() {
         </DialogContent>
               </Dialog>
 
-        {/* Time Table Popup Dialog */}
-        <Dialog open={showTimeTable} onOpenChange={setShowTimeTable}>
+        {/* Time Table Popup Dialog - ใช้ Component ใหม่ */}
+        <TimeTablePopup
+          open={showTimeTable}
+          onOpenChange={setShowTimeTable}
+          selectedDate={selectedDate}
+          jobs={getSelectedDayProduction()}
+          users={users}
+        />
+
+        {/* Time Table Popup Dialog - เก่า (ยังไม่ลบ) */}
+        {/* <Dialog open={showTimeTable} onOpenChange={setShowTimeTable}>
           <DialogContent className="max-w-7xl max-h-[90vh] overflow-auto">
             <DialogHeader>
               <DialogTitle className="flex items-center space-x-2">
@@ -3993,7 +4003,7 @@ export default function MedicalAppointmentDashboard() {
               </Button>
             </DialogFooter>
           </DialogContent>
-        </Dialog>
+        </Dialog> */}
         </>
       )}
     </div>

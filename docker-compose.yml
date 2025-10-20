@@ -3,12 +3,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    env_file:
+      - ./frontend/.env.production
     ports:
-      - "3012:3012"
-    environment:
-      - NODE_ENV=production
-      - NEXT_PUBLIC_API_URL=http://192.168.0.94:3102
-      - BACKEND_URL=http://192.168.0.94:3102
+      - "${WEB_PORT:-3012}:3012"
     depends_on:
       - backend
     restart: unless-stopped
@@ -21,15 +19,10 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    env_file:
+      - ./backend/.env.production
     ports:
-      - "3102:3102"
-    environment:
-      - NODE_ENV=production
-      - DB_HOST=192.168.0.94
-      - DB_USER=jitdhana
-      - DB_PASSWORD=iT12345$
-      - DB_NAME=esp_tracker
-      - DB_PORT=3306
+      - "${API_PORT:-3102}:3102"
     restart: unless-stopped
     networks:
       - workplan-network

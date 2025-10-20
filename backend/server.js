@@ -5,8 +5,9 @@ const rateLimit = require('express-rate-limit');
 const compression = require('compression');
 const path = require('path');
 
-// Load environment variables
-require('dotenv').config({ path: './production.env' });
+// Load environment variables dynamically based on NODE_ENV
+const envFile = process.env.NODE_ENV === 'production' ? '.env.production' : '.env.development';
+require('dotenv').config({ path: `./${envFile}` });
 
 // Import middleware
 const responseMonitoring = require('./middleware/responseMonitoring');
@@ -109,13 +110,31 @@ app.use('/static', express.static(path.join(__dirname, 'public'), {
 }));
 
 // Health check endpoint
-app.get('/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'OK', 
+app.get('/health', async (req, res) => {
+  const healthcheck = {
+    status: 'healthy',
     timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    memory: process.memoryUsage(),
-  });
+    uptime: Math.floor(process.uptime()),
+    environment: process.env.NODE_ENV || 'development',
+    version: '1.0.0',
+    memory: {
+      used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + ' MB',
+      total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + ' MB'
+    }
+  };
+  
+  // Test database connection
+  try {
+    const { pool } = require('./config/database');
+    await pool.query('SELECT 1');
+    healthcheck.database = 'connected';
+  } catch (error) {
+    healthcheck.database = 'disconnected';
+    healthcheck.status = 'unhealthy';
+  }
+  
+  const statusCode = healthcheck.status === 'healthy' ? 200 : 503;
+  res.status(statusCode).json(healthcheck);
 });
 
 // API routes
