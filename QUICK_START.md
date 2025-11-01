@@ -32,13 +32,26 @@ ssh username@server_ip
 ```
 
 **2. Clone repository:**
-```bash
-# Clone repository
-git clone https://github.com/iTjitdhana/WorkplanV8Linux.git
-# หรือใช้ SSH (ถ้ามี SSH key setup แล้ว)
-git clone git@github.com:iTjitdhana/WorkplanV8Linux.git
 
-# เข้าไปในโฟลเดอร์
+**วิธีที่ 1: ใช้ HTTPS (แนะนำสำหรับเริ่มต้น)**
+```bash
+git clone https://github.com/iTjitdhana/WorkplanV8Linux.git
+```
+
+**วิธีที่ 2: ใช้ SSH (ถ้ามี SSH key setup แล้ว - ไม่ต้องใส่ password)**
+```bash
+# ทดสอบ SSH connection ก่อน
+ssh -T git@github.com
+# ควรเห็น: Hi iTjitdhana! You've successfully authenticated...
+
+# Clone ด้วย SSH
+git clone git@github.com:iTjitdhana/WorkplanV8Linux.git
+```
+
+> 📖 **ดูคู่มือ SSH Key:** [GITHUB_SSH_KEY_GUIDE.md](./GITHUB_SSH_KEY_GUIDE.md)
+
+**3. เข้าไปในโฟลเดอร์:**
+```bash
 cd WorkplanV8Linux
 
 # ตรวจสอบ version (ถ้าต้องการ)
