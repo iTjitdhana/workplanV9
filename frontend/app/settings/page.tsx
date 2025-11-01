@@ -1,5 +1,6 @@
 'use client';
 
+import { getApiUrl } from '@/lib/config';
 import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -27,7 +28,7 @@ export default function SettingsPage() {
   const saveSettings = async () => {
     setLoading(true);
     try {
-      const response = await fetch('/api/settings', {
+      const response = await fetch(getApiUrl('/api/settings'), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -69,7 +70,7 @@ export default function SettingsPage() {
   // ฟังก์ชันโหลดการตั้งค่า
   const loadSettings = async () => {
     try {
-      const response = await fetch('/api/settings');
+      const response = await fetch(getApiUrl('/api/settings'));
       const data = await response.json();
       if (data.success && data.data) {
         setSyncModeEnabled(data.data.syncModeEnabled || false);
@@ -85,7 +86,7 @@ export default function SettingsPage() {
   // โหลดค่า Auto Refresh เฉพาะ เพื่อความทนทานเมื่อ backend ส่งค่า settings รวมไม่ครบ
   const loadAutoRefreshSetting = async () => {
     try {
-      const response = await fetch('/api/settings/auto-refresh');
+      const response = await fetch(getApiUrl('/api/settings/auto-refresh'));
       const data = await response.json();
       if (data.success && typeof data.autoRefreshEnabled === 'boolean') {
         setAutoRefreshEnabled(data.autoRefreshEnabled === true);

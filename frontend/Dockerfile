@@ -3,11 +3,15 @@ FROM node:18-alpine AS builder
 
 WORKDIR /app
 
+# Install dependencies for node-gyp (if needed)
+RUN apk add --no-cache python3 make g++ libc6-compat
+
 # Copy package files
 COPY package*.json ./
+COPY package-lock.json* ./
 
-# Install dependencies (use npm install instead of npm ci for better compatibility)
-RUN npm install
+# Install dependencies
+RUN npm ci --legacy-peer-deps || npm install --legacy-peer-deps
 
 # Copy source code
 COPY . .

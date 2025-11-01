@@ -1,34 +1,55 @@
 services:
-  frontend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    env_file:
-      - ./frontend/.env.production
-    ports:
-      - "${WEB_PORT:-3012}:3012"
-    depends_on:
-      - backend
-    restart: unless-stopped
-    networks:
-      - workplan-network
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    env_file:
-      - ./backend/.env.production
+    container_name: workplan-backend
     ports:
-      - "${API_PORT:-3102}:3102"
+      - "3101:3101"
+    environment:
+      - NODE_ENV=production
+      - DB_HOST=${DB_HOST}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - DB_PORT=${DB_PORT:-3306}
+    env_file:
+      - ./backend/.env
     restart: unless-stopped
     networks:
       - workplan-network
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3101/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: workplan-frontend
+    ports:
+      - "3011:3011"
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:3101}
+      - BACKEND_URL=${BACKEND_URL:-http://backend:3101}
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - workplan-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3011', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
 networks:
   workplan-network:
     driver: bridge
+

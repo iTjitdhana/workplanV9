@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Calendar, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -70,8 +70,21 @@ export const SimpleDatePicker: React.FC<SimpleDatePickerProps> = ({
   const currentYear = today.getFullYear();
   const currentMonth = today.getMonth();
   
-  const [viewYear, setViewYear] = useState(currentYear);
-  const [viewMonth, setViewMonth] = useState(currentMonth);
+  // Initialize จาก value ถ้ามี มิฉะนั้นใช้เดือนปัจจุบัน
+  const initialYear = selectedDate ? selectedDate.getFullYear() : currentYear;
+  const initialMonth = selectedDate ? selectedDate.getMonth() : currentMonth;
+  
+  const [viewYear, setViewYear] = useState(initialYear);
+  const [viewMonth, setViewMonth] = useState(initialMonth);
+  
+  // Update calendar view เมื่อ popup เปิดครั้งแรก
+  useEffect(() => {
+    if (isOpen && value) {
+      const date = new Date(value + 'T00:00:00');
+      setViewYear(date.getFullYear());
+      setViewMonth(date.getMonth());
+    }
+  }, [isOpen, value]);
 
   const weeks = generateCalendar(viewYear, viewMonth);
   const monthNames = [
@@ -212,9 +225,14 @@ export const SimpleDatePicker: React.FC<SimpleDatePickerProps> = ({
                 size="sm"
                 onClick={() => {
                   const today = new Date();
-                  handleDateClick(today.getDate());
-                  setViewYear(today.getFullYear());
+                  const year = today.getFullYear();
+                  const month = String(today.getMonth() + 1).padStart(2, '0');
+                  const day = String(today.getDate()).padStart(2, '0');
+                  const formattedDate = `${year}-${month}-${day}`;
+                  onChange(formattedDate);
+                  setViewYear(year);
                   setViewMonth(today.getMonth());
+                  setIsOpen(false);
                 }}
                 className="text-xs py-2 hover:bg-green-50 hover:text-green-700 hover:border-green-300"
               >

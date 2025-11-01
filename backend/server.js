@@ -13,13 +13,13 @@ require('dotenv').config({ path: `./${envFile}` });
 const responseMonitoring = require('./middleware/responseMonitoring');
 
 const app = express();
-const PORT = process.env.PORT || 3102;
+const PORT = process.env.PORT || 3101;
 
 // Debug logging
 console.log('🚀 Starting Backend Server...');
 console.log('📊 Environment:', process.env.NODE_ENV || 'development');
 console.log('🔌 Port:', PORT);
-console.log('🌐 CORS Origin:', process.env.CORS_ORIGIN || 'http://192.168.0.94:3012');
+console.log('🌐 CORS Origin(s):', process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || 'not set');
 console.log('🗄️ Database Host:', process.env.DB_HOST || 'localhost');
 
 // Performance optimizations - Enhanced compression
@@ -83,9 +83,16 @@ const limiter = rateLimit({
 // Don't apply rate limiting to logs and other read-only endpoints
 
 // CORS configuration
+const configuredCorsOrigins = (process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production' 
-    ? [process.env.CORS_ORIGIN || 'http://192.168.0.94:3012', 'http://localhost:3012', 'http://127.0.0.1:3012']
+  origin: process.env.NODE_ENV === 'production'
+    ? (configuredCorsOrigins.length > 0
+        ? configuredCorsOrigins
+        : ['http://localhost:3011', 'http://127.0.0.1:3011'])
     : true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -199,9 +206,10 @@ const testConnectionAndSetStatus = async () => {
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/health`);
-  console.log(`🌍 External access: http://192.168.0.94:${PORT}/health`);
+  const PUBLIC_HOST = process.env.PUBLIC_HOST || 'localhost';
+  console.log(`🌍 External access: http://${PUBLIC_HOST}:${PORT}/health`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🔗 API Base URL: http://192.168.0.94:${PORT}/api`);
+  console.log(`🔗 API Base URL: http://${PUBLIC_HOST}:${PORT}/api`);
   console.log(`✅ Server is ready to accept connections!`);
   
   // Test database connection and set status

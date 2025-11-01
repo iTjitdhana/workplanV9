@@ -66,7 +66,11 @@ export const getOperatorsString = (operators: string | string[]): string => {
 
 // Helper function to check if item is draft
 export const isDraftItem = (item: ProductionItem): boolean => {
-  return item.is_draft === true || item.isDraft === true || item.status === 'draft';
+  // ✅ เพิ่มการเช็ค workflow_status = 'draft' (Backend ใช้ workflow_status)
+  return item.is_draft === true || 
+         item.isDraft === true || 
+         item.status === 'draft' ||
+         (item as any).workflow_status === 'draft';
 };
 
 // Helper function to check if item is special
@@ -76,7 +80,7 @@ export const isSpecialItem = (item: ProductionItem): boolean => {
 
 // Helper function to get machine code
 export const getMachineCode = (item: ProductionItem): string | undefined => {
-  return item.machine_code || item.machine_id;
+  return item.machine_code || (item.machine_id !== undefined ? String(item.machine_id) : undefined);
 };
 
 // Helper function to normalize string

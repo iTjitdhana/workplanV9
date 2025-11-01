@@ -1,5 +1,6 @@
 'use client';
 
+import { getApiUrl } from '@/lib/config';
 import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -53,7 +54,7 @@ export default function MonitoringPage() {
   // ฟังก์ชันดึงข้อมูลสถิติ
   const fetchStats = async () => {
     try {
-      const response = await fetch('/api/monitoring/stats');
+      const response = await fetch(getApiUrl('/api/monitoring/stats'));
       const data = await response.json();
       if (data.success) {
         // เพิ่มข้อมูลจำลองสำหรับการแสดงผล
@@ -87,7 +88,7 @@ export default function MonitoringPage() {
   // ฟังก์ชันดึงข้อมูลการแจ้งเตือน
   const fetchAlerts = async () => {
     try {
-      const response = await fetch('/api/monitoring/alerts');
+      const response = await fetch(getApiUrl('/api/monitoring/alerts'));
       const data = await response.json();
       if (data.success) {
         setAlerts(data.data);
@@ -101,7 +102,7 @@ export default function MonitoringPage() {
   const startMonitoring = async () => {
     setLoading(true);
     try {
-      const response = await fetch('/api/monitoring/start', { method: 'POST' });
+      const response = await fetch(getApiUrl('/api/monitoring/start'), { method: 'POST' });
       const data = await response.json();
       if (data.success) {
         setIsMonitoring(true);
@@ -117,7 +118,7 @@ export default function MonitoringPage() {
   const stopMonitoring = async () => {
     setLoading(true);
     try {
-      const response = await fetch('/api/monitoring/stop', { method: 'POST' });
+      const response = await fetch(getApiUrl('/api/monitoring/stop'), { method: 'POST' });
       const data = await response.json();
       if (data.success) {
         setIsMonitoring(false);
@@ -132,7 +133,7 @@ export default function MonitoringPage() {
   // ฟังก์ชันล้างการแจ้งเตือน
   const clearAlerts = async () => {
     try {
-      const response = await fetch('/api/monitoring/alerts', { method: 'DELETE' });
+      const response = await fetch(getApiUrl('/api/monitoring/alerts'), { method: 'DELETE' });
       const data = await response.json();
       if (data.success) {
         setAlerts([]);
@@ -147,7 +148,7 @@ export default function MonitoringPage() {
   const checkHealth = async () => {
     setLoading(true);
     try {
-      const response = await fetch('/api/monitoring/health', { method: 'POST' });
+      const response = await fetch(getApiUrl('/api/monitoring/health'), { method: 'POST' });
       const data = await response.json();
       if (data.success) {
         await fetchStats();
