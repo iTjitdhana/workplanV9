@@ -1,10 +1,42 @@
 # 🚀 Quick Start Guide - Deploy บน Linux Server
 
+## 🔍 หา Username และ Server IP
+
+**Username** = ชื่อ user สำหรับ login (เช่น `root`, `ubuntu`, `admin`)  
+**Server IP** = IP address ของ server (เช่น `192.168.0.94`, `54.123.45.67`)
+
+> 📖 **ดูคู่มือเพิ่มเติม:** [HOW_TO_FIND_SSH_DETAILS.md](./HOW_TO_FIND_SSH_DETAILS.md)
+
+### วิธีหา:
+- **Username:** ลอง `root`, `ubuntu`, `admin` หรือดูจากผู้ที่ setup server
+- **Server IP:** ดูจาก Cloud Provider Dashboard หรือใช้ `ifconfig`/`ipconfig`
+
+### ตัวอย่าง:
+```bash
+# ตัวอย่าง 1: Local Network
+ssh root@192.168.0.94
+
+# ตัวอย่าง 2: AWS EC2
+ssh ubuntu@54.123.45.67
+
+# ตัวอย่าง 3: มี SSH Key
+ssh -i ~/.ssh/key.pem ubuntu@192.168.0.94
+```
+
 ## ขั้นตอนที่ 1: Clone Repository
 
+**1. SSH เข้า server:**
+```bash
+ssh username@server_ip
+# เช่น: ssh root@192.168.0.94
+```
+
+**2. Clone repository:**
 ```bash
 # Clone repository
 git clone https://github.com/iTjitdhana/WorkplanV8Linux.git
+# หรือใช้ SSH (ถ้ามี SSH key setup แล้ว)
+git clone git@github.com:iTjitdhana/WorkplanV8Linux.git
 
 # เข้าไปในโฟลเดอร์
 cd WorkplanV8Linux
