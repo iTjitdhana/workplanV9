@@ -89,11 +89,14 @@ const configuredCorsOrigins = (process.env.CORS_ORIGINS || process.env.CORS_ORIG
   .filter(Boolean);
 
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production'
-    ? (configuredCorsOrigins.length > 0
-        ? configuredCorsOrigins
-        : ['http://localhost:3011', 'http://127.0.0.1:3011'])
-    : true,
+  origin: (() => {
+    if (process.env.NODE_ENV !== 'production') return true;
+    if (configuredCorsOrigins.length > 0) return configuredCorsOrigins;
+    const fallback = (process.env.FRONTEND_URL || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (fallback.length > 0) return fallback;
+    console.warn('⚠️  No CORS origins configured. Allowing all origins in production. Set CORS_ORIGINS or FRONTEND_URL.');
+    return true;
+  })(),
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],

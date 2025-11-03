@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     container_name: workplan-backend
     ports:
-      - "3101:3101"
+      - "3102:3101"
     environment:
       - NODE_ENV=production
       - DB_HOST=${DB_HOST}
@@ -31,10 +31,10 @@ services:
       dockerfile: Dockerfile
     container_name: workplan-frontend
     ports:
-      - "3011:3011"
+      - "3012:3011"
     environment:
       - NODE_ENV=production
-      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:3101}
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:3102}
       - BACKEND_URL=${BACKEND_URL:-http://backend:3101}
     depends_on:
       backend:
