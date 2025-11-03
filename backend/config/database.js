@@ -19,7 +19,7 @@ const dbConfig = {
   queueLimit: 0,
   maxIdle: 10,           // จำนวน idle connections สูงสุด
   // Remote connection settings
-  ssl: false,
+  ssl: { rejectUnauthorized: false },
   // Connection timeout (optimized)
   connectTimeout: 30000,  // 30 seconds (ลดจาก 60)
   acquireTimeout: 30000,  // 30 seconds (ลดจาก 60)
