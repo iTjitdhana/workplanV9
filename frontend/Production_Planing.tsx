@@ -992,9 +992,9 @@ export default function MedicalAppointmentDashboard() {
       };
       
       debugLog('📅 Request body:', requestBody);
-      debugLog('📅 API URL:', `/api/work-plans`);
+      debugLog('📅 API URL:', `/api/work-plans/drafts`);
       
-      const res = await fetch(getApiUrl(`/api/work-plans`), {
+      const res = await fetch(getApiUrl(`/api/work-plans/drafts`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody),
