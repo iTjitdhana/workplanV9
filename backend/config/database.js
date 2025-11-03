@@ -1,4 +1,6 @@
 const mysql = require('mysql2/promise');
+// Use non-promise mysql2 for auth plugin references
+const mysql2 = require('mysql2');
 require('dotenv').config();
 
 // ตรวจสอบ environment
@@ -20,6 +22,11 @@ const dbConfig = {
   maxIdle: 10,           // จำนวน idle connections สูงสุด
   // Remote connection settings
   ssl: { rejectUnauthorized: false },
+  // Explicitly provide mysql_native_password auth plugin handler to avoid
+  // AUTH_SWITCH_PLUGIN_ERROR on some server configurations
+  authPlugins: {
+    mysql_native_password: mysql2.authPlugins.mysql_native_password,
+  },
   // Connection timeout (optimized)
   connectTimeout: 30000,  // 30 seconds (ลดจาก 60)
   acquireTimeout: 30000,  // 30 seconds (ลดจาก 60)
