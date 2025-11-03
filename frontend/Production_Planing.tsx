@@ -4130,19 +4130,47 @@ export default function MedicalAppointmentDashboard() {
             </div>
           </div>
           <DialogFooter className="flex justify-between">
-            {/* แสดงปุ่มลบเฉพาะแบบร่างเท่านั้น */}
+            {/* ปุ่มการกระทำซ้าย: ลบเมื่อเป็น draft, หรือยกเลิกงานเมื่อเป็น completed */}
             {(() => {
-              const shouldShowDelete = editDraftData && (editDraftData.isDraft || (typeof editDraftData.id === 'string' && editDraftData.id.startsWith('draft_')));
-              return shouldShowDelete ? (
-                <Button 
-                  variant="destructive" 
-                  onClick={() => handleDeleteDraft(editDraftId)} 
-                  disabled={isSubmitting}
-                  className={`bg-red-600 hover:bg-red-700 text-white ${notoSansThai.className}`}
-                >
-                  {isSubmitting ? "กำลังลบ..." : "ลบ"}
-                </Button>
-              ) : null;
+              if (!editDraftData) return null;
+              const isDraftRecord =
+                editDraftData.isDraft ||
+                (typeof editDraftData.id === 'string' && editDraftData.id.startsWith('draft_')) ||
+                editDraftData.workflow_status === 'draft' ||
+                editDraftData.workflow_status_id === 1;
+
+              // กรณีเป็น Draft: แสดงปุ่มลบ
+              if (isDraftRecord) {
+                return (
+                  <Button
+                    variant="destructive"
+                    onClick={() => handleDeleteDraft(editDraftId)}
+                    disabled={isSubmitting}
+                    className={`bg-red-600 hover:bg-red-700 text-white ${notoSansThai.className}`}
+                  >
+                    {isSubmitting ? "กำลังลบ..." : "ลบ"}
+                  </Button>
+                );
+              }
+
+              // กรณีบันทึกเสร็จสิ้น: แสดงปุ่มยกเลิกงาน (status_id = 9)
+              const isCompletedRecord =
+                editDraftData.workflow_status === 'completed' ||
+                editDraftData.workflow_status_id === 2;
+              if (isCompletedRecord && editDraftData.id) {
+                return (
+                  <Button
+                    variant="destructive"
+                    onClick={() => handleCancelProduction(String(editDraftData.id))}
+                    disabled={isSubmitting}
+                    className={`bg-red-600 hover:bg-red-700 text-white ${notoSansThai.className}`}
+                  >
+                    {isSubmitting ? "กำลังยกเลิก..." : "ยกเลิกงาน"}
+                  </Button>
+                );
+              }
+
+              return null;
             })()}
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => handleSaveEditDraft(true)} disabled={isSubmitting} className={notoSansThai.className}>บันทึกแบบร่าง</Button>
