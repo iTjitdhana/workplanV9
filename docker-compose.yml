@@ -34,8 +34,9 @@ services:
       - "3012:3011"
     environment:
       - NODE_ENV=production
-      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:3102}
-      - BACKEND_URL=${BACKEND_URL:-http://backend:3101}
+      # ชี้ URL ของ Backend ให้กับทั้งฝั่งบราวเซอร์ (NEXT_PUBLIC_*) และฝั่งเซิร์ฟเวอร์ของ Next.js
+      - NEXT_PUBLIC_API_URL=http://backend:3101
+      - BACKEND_URL=http://backend:3101
     depends_on:
       backend:
         condition: service_healthy
