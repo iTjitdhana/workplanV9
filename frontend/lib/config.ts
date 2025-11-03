@@ -3,7 +3,8 @@
 export const config = {
   // API Configuration
   api: {
-    baseUrl: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3102',
+    // Resolve from environment only; no localhost fallback for production builds
+    baseUrl: (process.env.NEXT_PUBLIC_API_URL ?? process.env.BACKEND_URL ?? ''),
     timeout: 30000, // 30 seconds
     retryAttempts: 3,
   },
@@ -48,7 +49,7 @@ export const config = {
 
 // Helper functions
 export const getApiUrl = (endpoint: string): string => {
-  const baseUrl = config.api.baseUrl.replace(/\/$/, ''); // Remove trailing slash
+  const baseUrl = (config.api.baseUrl || '').replace(/\/$/, ''); // Remove trailing slash
   const cleanEndpoint = endpoint.replace(/^\//, ''); // Remove leading slash
   return `${baseUrl}/${cleanEndpoint}`;
 };
