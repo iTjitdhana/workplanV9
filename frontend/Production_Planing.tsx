@@ -1872,10 +1872,12 @@ export default function MedicalAppointmentDashboard() {
     setIsSubmitting(true);
     setMessage("");
     try {
-          debugLog('🗑️ Making DELETE request to:', `/api/work-plans/drafts/${draftId}`);
-      const res = await fetch(getApiUrl(`/api/work-plans/${draftId}`), {
+          const url = getApiUrl(`/api/work-plans/drafts/${draftId}`);
+      debugLog('🗑️ Making DELETE request to:', url);
+      const res = await fetch(url, {
         method: "DELETE",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        mode: 'cors'
       });
       debugLog('🗑️ Response status:', res.status);
       
