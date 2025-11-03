@@ -26,6 +26,7 @@ const dbConfig = {
   // AUTH_SWITCH_PLUGIN_ERROR on some server configurations
   authPlugins: {
     mysql_native_password: mysql2.authPlugins.mysql_native_password,
+    caching_sha2_password: mysql2.authPlugins.caching_sha2_password,
   },
   // Connection timeout (optimized)
   connectTimeout: 30000,  // 30 seconds (ลดจาก 60)
