@@ -855,7 +855,7 @@ export default function MedicalAppointmentDashboard() {
         work_order: workOrder // เพิ่มลำดับงาน
       };
       debugLog("[DEBUG] requestBody:", requestBody);
-      const res = await fetch(getApiUrl(`/api/work-plans`), {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/work-plans`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody),
@@ -994,7 +994,7 @@ export default function MedicalAppointmentDashboard() {
       debugLog('📅 Request body:', requestBody);
       debugLog('📅 API URL:', `/api/work-plans`);
       
-      const res = await fetch(getApiUrl(`/api/work-plans`), {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/work-plans`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody),
