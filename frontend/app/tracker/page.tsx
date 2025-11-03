@@ -2,7 +2,7 @@
 import React, { useEffect, useState, useRef } from "react";
 import { Noto_Sans_Thai } from "next/font/google";
 import { translations, Language } from "@/lib/translations";
-import { debugLog, debugError } from "@/lib/config";
+import { debugLog, debugError, getApiUrl } from "@/lib/config";
 
 const notoSansThai = Noto_Sans_Thai({
   subsets: ["thai", "latin"],
@@ -81,7 +81,7 @@ export default function TrackerPage() {
     setIsLoading(true);
     debugLog('Starting to load workplans for date:', date);
     
-    fetch(`/api/work-plans?date=${date}`, {
+    fetch(getApiUrl(`/api/work-plans?date=${date}`), {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
@@ -237,7 +237,7 @@ export default function TrackerPage() {
      (window as any).lastRefreshTime = now;
     
     try {
-      const response = await fetch(`/api/work-plans?date=${date}`);
+      const response = await fetch(getApiUrl(`/api/work-plans?date=${date}`));
       
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -333,7 +333,7 @@ export default function TrackerPage() {
   // Load auto refresh setting function
   const loadAutoRefreshSetting = async () => {
     try {
-      const response = await fetch('/api/settings/auto-refresh');
+      const response = await fetch(getApiUrl('/api/settings/auto-refresh'));
       const data = await response.json();
       if (data.success) {
         const newValue = data.autoRefreshEnabled;
@@ -458,7 +458,7 @@ export default function TrackerPage() {
             debugLog('[DEBUG] Using normal process steps for new/1 job:', processSteps);
           } else {
             // งานอื่นๆ - โหลดจาก API
-            const stepsRes = await fetch(`/api/process-steps?job_code=${selectedWorkplan.job_code}`);
+            const stepsRes = await fetch(getApiUrl(`/api/process-steps?job_code=${selectedWorkplan.job_code}`));
             if (!stepsRes.ok) {
               throw new Error(`Process steps API error: ${stepsRes.status}`);
             }
@@ -468,7 +468,7 @@ export default function TrackerPage() {
           }
           
           // โหลด logs (สำหรับงานตวงสูตรจะไม่มี logs เริ่มต้น)
-          const logsRes = await fetch(`/api/logs/work-plan/${selectedWorkplan.id}`);
+          const logsRes = await fetch(getApiUrl(`/api/logs/work-plan/${selectedWorkplan.id}`));
           if (!logsRes.ok) {
             throw new Error(`Logs API error: ${logsRes.status}`);
           }
@@ -508,7 +508,7 @@ export default function TrackerPage() {
 
          const refreshLogs = async () => {
        try {
-         const logsResponse = await fetch(`/api/logs/work-plan/${selectedWorkplan.id}`);
+         const logsResponse = await fetch(getApiUrl(`/api/logs/work-plan/${selectedWorkplan.id}`));
          
          // ตรวจสอบ HTTP status
          if (!logsResponse.ok) {
@@ -608,7 +608,7 @@ export default function TrackerPage() {
       debugLog("[DEBUG] Full URL:", `/api/work-plans/${selectedWorkplan.id}/status`);
       
       // อัปเดตสถานะงานเป็น "เสร็จสิ้น" (status_id = 4)
-      const res = await fetch(`/api/work-plans/${selectedWorkplan.id}/status`, {
+      const res = await fetch(getApiUrl(`/api/work-plans/${selectedWorkplan.id}/status`), {
         method: "PATCH",
         headers: { 
           "Content-Type": "application/json",
@@ -627,7 +627,7 @@ export default function TrackerPage() {
 
       // เรียก finish flag โดยตรงเพื่ออัปเดตตาราง finished_flags ให้แน่นอน
       try {
-        const finishRes = await fetch(`/api/work-plans/${selectedWorkplan.id}/finish`, {
+        const finishRes = await fetch(getApiUrl(`/api/work-plans/${selectedWorkplan.id}/finish`), {
           method: "PATCH",
           headers: {
             "Content-Type": "application/json",
@@ -650,7 +650,7 @@ export default function TrackerPage() {
       
       // Reload workplans เพื่ออัปเดตสถานะ
       debugLog("[DEBUG] Reloading workplans...");
-      const workplansRes = await fetch(`/api/work-plans?date=${date}`);
+      const workplansRes = await fetch(getApiUrl(`/api/work-plans?date=${date}`));
       const workplansData = await workplansRes.json();
       setWorkplans((workplansData.data || []).filter((wp: any) => wp.status_name !== 'งานผลิตถูกยกเลิก'));
       
@@ -724,7 +724,7 @@ export default function TrackerPage() {
       
       debugLog("[DEBUG] ส่ง log ไป backend:", logData);
       
-      const res = await fetch(`/api/logs`, {
+      const res = await fetch(getApiUrl('/api/logs'), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(logData)
@@ -738,22 +738,46 @@ export default function TrackerPage() {
         throw new Error(result.message || "API error");
       }
       
-             setMessage(isStart ? "เริ่มขั้นตอนแล้ว" : "หยุดขั้นตอนแล้ว");
-       setStatusType("success");
-       
-       // ลบข้อความหลังจาก 2 วินาที
-       setTimeout(() => {
-         setMessage('');
-       }, 2000);
+      setMessage(isStart ? "เริ่มขั้นตอนแล้ว" : "หยุดขั้นตอนแล้ว");
+      setStatusType("success");
       
-      // reload logs
+      // ลบข้อความหลังจาก 2 วินาที
+      setTimeout(() => {
+        setMessage('');
+      }, 2000);
+      
+      // อัปเดต processLogs จาก response ทันทีถ้ามี
+      if (result.data && result.data.process_number) {
+        debugLog("[DEBUG] Updating processLogs with response data:", result.data);
+        setProcessLogs((prevLogs: any[]) => {
+          const existingIndex = prevLogs.findIndex(
+            (l: any) => l.process_number === result.data.process_number
+          );
+          
+          if (existingIndex >= 0) {
+            // อัปเดต log ที่มีอยู่
+            const updated = [...prevLogs];
+            updated[existingIndex] = result.data;
+            return updated;
+          } else {
+            // เพิ่ม log ใหม่
+            return [...prevLogs, result.data];
+          }
+        });
+      }
+      
+      // reload logs เพื่อให้แน่ใจว่าข้อมูลตรงกับ database
       debugLog("[DEBUG] Reloading logs...");
       const fetchUrl = selectedWorkplan.isWeighingJob
-        ? `/api/logs/work-plan/4`
-        : `/api/logs/work-plan/${selectedWorkplan.id}`;
+        ? getApiUrl('/api/logs/work-plan/4')
+        : getApiUrl(`/api/logs/work-plan/${selectedWorkplan.id}`);
       const logs = await fetch(fetchUrl).then(r => r.json());
       debugLog("[DEBUG] Reloaded logs:", logs);
-      setProcessLogs(logs.data || []);
+      
+      // อัปเดต logs ทั้งหมดหลังจาก reload
+      if (logs.data && Array.isArray(logs.data)) {
+        setProcessLogs(logs.data);
+      }
       
     } catch (e: any) {
       debugError("[DEBUG] Error in handleLog:", e);

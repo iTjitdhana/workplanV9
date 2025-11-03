@@ -1,4 +1,8 @@
 -- Fix MySQL User Permissions for jitdhana user
+-- NOTE: Avoid hardcoding specific IPs in grants unless required by policy.
+--       Prefer using '%' or set the host explicitly before running this script.
+--       If you must restrict to a specific host, replace 192.168.0.94 below
+--       with your actual database-access host.
 -- Run this script as MySQL root user
 
 -- Create user if not exists and set password

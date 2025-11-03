@@ -7,6 +7,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Loader2, Save, RefreshCw } from 'lucide-react';
+import { getApiUrl } from '@/lib/config';
 
 interface Role {
   id: number;
@@ -46,7 +47,7 @@ export default function RoleManagementPage() {
   // ดึงรายการบทบาท
   const fetchRoles = async () => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3102'}/api/admin/roles`);
+      const response = await fetch(getApiUrl('/api/admin/roles'));
       const data = await response.json();
       if (data.success) {
         setRoles(data.data);
@@ -60,7 +61,7 @@ export default function RoleManagementPage() {
   // ดึงรายการเมนู
   const fetchMenus = async () => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3102'}/api/admin/menu-catalog`);
+      const response = await fetch(getApiUrl('/api/admin/menu-catalog'));
       const data = await response.json();
       if (data.success) {
         setMenus(data.data);
@@ -74,7 +75,7 @@ export default function RoleManagementPage() {
   // ดึงสิทธิ์ของบทบาท
   const fetchRolePermissions = async (roleId: number) => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3102'}/api/admin/roles/${roleId}/permissions`);
+      const response = await fetch(getApiUrl(`/api/admin/roles/${roleId}/permissions`));
       const data = await response.json();
       if (data.success) {
         setRolePermissions(data.data);
@@ -108,7 +109,7 @@ export default function RoleManagementPage() {
     setSaving(true);
     try {
       // อัปเดตเฉพาะเมนูที่เปลี่ยน
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3102'}/api/admin/roles/${selectedRole}/permissions/${menuKey}/${checked ? 'grant' : 'revoke'}`, {
+      const response = await fetch(getApiUrl(`/api/admin/roles/${selectedRole}/permissions/${menuKey}/${checked ? 'grant' : 'revoke'}`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

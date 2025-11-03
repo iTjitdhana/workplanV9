@@ -7,9 +7,13 @@ const router = express.Router();
 // Validation middleware
 const workPlanValidation = [
   body('production_date')
-    .isISO8601()
-    .toDate()
-    .withMessage('Production date must be a valid date'),
+    .custom((value) => {
+      if (!value) return true; // optional fields
+      // Accept YYYY-MM-DD or ISO8601
+      const dateRegex = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d{3})?Z?)?$/;
+      return dateRegex.test(value);
+    })
+    .withMessage('Production date must be in YYYY-MM-DD or ISO8601 format'),
   body('job_code')
     .notEmpty()
     .withMessage('Job code is required')
@@ -20,12 +24,22 @@ const workPlanValidation = [
     .isLength({ max: 255 })
     .withMessage('Job name must not exceed 255 characters'),
   body('start_time')
-    .optional()
-    .matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$/)
+    .optional({ nullable: true, checkFalsy: true })
+    .custom((value) => {
+      // ถ้าเป็น null หรือ undefined หรือ empty string ให้ผ่าน (สำหรับแบบร่าง)
+      if (!value || value === '' || value === null) return true;
+      // ถ้ามีค่าให้ตรวจสอบรูปแบบ
+      return /^([0-1]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$/.test(value);
+    })
     .withMessage('Start time must be in HH:MM or HH:MM:SS format'),
   body('end_time')
-    .optional()
-    .matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$/)
+    .optional({ nullable: true, checkFalsy: true })
+    .custom((value) => {
+      // ถ้าเป็น null หรือ undefined หรือ empty string ให้ผ่าน (สำหรับแบบร่าง)
+      if (!value || value === '' || value === null) return true;
+      // ถ้ามีค่าให้ตรวจสอบรูปแบบ
+      return /^([0-1]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$/.test(value);
+    })
     .withMessage('End time must be in HH:MM or HH:MM:SS format'),
   body('operators')
     .optional()

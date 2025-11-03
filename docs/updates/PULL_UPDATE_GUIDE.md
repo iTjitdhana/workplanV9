@@ -118,7 +118,7 @@ docker-compose restart
 # ตรวจสอบ port ที่ใช้
 netstat -an | findstr :3011
 
-# เปลี่ยน port ใน docker-compose.yml
+# เปลี่ยน port ใน infra/docker-compose.yml
 ```
 
 ## 📊 **การจัดการ Versions**

@@ -16,7 +16,7 @@ services:
       - /app/.next
     environment:
       - NODE_ENV=development
-      - NEXT_PUBLIC_API_URL=http://192.168.0.94:3101
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
     depends_on:
       - backend
     networks:
@@ -37,11 +37,11 @@ services:
       - /app/node_modules
     environment:
       - NODE_ENV=development
-      - DB_HOST=192.168.0.94
-      - DB_USER=root
-      - DB_PASSWORD=123456
-      - DB_NAME=workplan
-      - DB_PORT=3306
+      - DB_HOST=${DB_HOST}
+      - DB_USER=${DB_USER:-root}
+      - DB_PASSWORD=${DB_PASSWORD:-123456}
+      - DB_NAME=${DB_NAME:-workplan}
+      - DB_PORT=${DB_PORT:-3306}
     depends_on:
       - mysql
     networks:

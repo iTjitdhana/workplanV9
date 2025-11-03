@@ -46,7 +46,7 @@ CREATE DATABASE IF NOT EXISTS manufacturing_system
 exit
 
 # 4. Import Structure จากไฟล์
-mysql -h 192.168.0.94 -u jitdhana -p manufacturing_system < structure_manufacturing_system.sql
+mysql -h 192.168.0.94 -u jitdhana -p manufacturing_system < database/sql/structure_manufacturing_system.sql
 ```
 
 ### Option 2: Import พร้อม Migrate ข้อมูลเดิม
@@ -59,7 +59,7 @@ mysqldump -h 192.168.0.94 -u jitdhana -p esp_tracker > esp_tracker_backup_$(date
 mysql -h 192.168.0.94 -u jitdhana -p -e "CREATE DATABASE IF NOT EXISTS manufacturing_system CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 
 # 3. Import Structure
-mysql -h 192.168.0.94 -u jitdhana -p manufacturing_system < structure_manufacturing_system.sql
+mysql -h 192.168.0.94 -u jitdhana -p manufacturing_system < database/sql/structure_manufacturing_system.sql
 
 # 4. Migrate ข้อมูล (ดูรายละเอียดด้านล่าง)
 ```
@@ -362,7 +362,7 @@ mysql -h 192.168.0.94 -u jitdhana -p < migrate_data.sql
 - [x] อัพเดท `.env.example`
 - [x] อัพเดท `backend/config/database.js`
 - [ ] สร้าง Database `manufacturing_system`
-- [ ] Import Structure จาก `structure_manufacturing_system.sql`
+- [ ] Import Structure จาก `database/sql/structure_manufacturing_system.sql`
 - [ ] Migrate ข้อมูลพื้นฐาน (users, machines, rooms)
 - [ ] Migrate Products และ Materials
 - [ ] สร้าง Process Templates
@@ -402,10 +402,9 @@ mysql -h 192.168.0.94 -u jitdhana -p -e "CREATE DATABASE manufacturing_system CH
 
 ## 📚 เอกสารอ้างอิง
 
-- `DATABASE_STRUCTURE.md` - โครงสร้าง manufacturing_system
-- `structure_manufacturing_system.sql` - SQL Structure
-- `structure_database_fromprocess.sql` - SQL Structure เก่า
-- `DEV_STANDARD.md` - มาตรฐานการพัฒนา
+- `docs/root-legacy/DATABASE_STRUCTURE.md` - โครงสร้าง manufacturing_system
+- `database/sql/structure_manufacturing_system.sql` - SQL Structure
+- `docs/root-legacy/DEV_STANDARD.md` - มาตรฐานการพัฒนา
 
 ---
 

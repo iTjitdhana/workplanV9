@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Edit, Trash2, Plus, Search, RefreshCw, User, Shield } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
+import { getApiUrl } from '@/lib/config';
 
 interface User {
   id: number;
@@ -45,7 +46,7 @@ export default function UsersPage() {
   const fetchUsers = async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/users');
+      const response = await fetch(getApiUrl('/api/users'));
       const data = await response.json();
       
       if (data.success) {
@@ -70,7 +71,7 @@ export default function UsersPage() {
 
   const handleCreateUser = async () => {
     try {
-      const response = await fetch('/api/users', {
+      const response = await fetch(getApiUrl('/api/users'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -108,7 +109,7 @@ export default function UsersPage() {
     if (!editingUser) return;
     
     try {
-      const response = await fetch(`/api/users/${editingUser.id}`, {
+      const response = await fetch(getApiUrl(`/api/users/${editingUser.id}`), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -146,7 +147,7 @@ export default function UsersPage() {
     if (!confirm('Are you sure you want to delete this user?')) return;
     
     try {
-      const response = await fetch(`/api/users/${id}`, {
+      const response = await fetch(getApiUrl(`/api/users/${id}`), {
         method: 'DELETE',
       });
 

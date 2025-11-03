@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import Select, { SingleValue, ActionMeta } from 'react-select';
-import { debugLog, debugError } from '@/lib/config';
+import { debugLog, debugError, getApiUrl } from '@/lib/config';
 
 export interface JobOption {
   value: string;
@@ -60,7 +60,7 @@ export const JobSearchSelect: React.FC<JobSearchSelectProps> = ({
       setIsLoading(true);
       debugLog('🔍 Searching for:', inputValue.trim());
       
-      const response = await fetch(`/api/process-steps/search?query=${encodeURIComponent(inputValue.trim())}`);
+      const response = await fetch(getApiUrl(`/api/process-steps/search?query=${encodeURIComponent(inputValue.trim())}`));
       const data = await response.json();
       
       if (data.success && data.data) {

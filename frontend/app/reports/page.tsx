@@ -14,6 +14,7 @@ import { th } from 'date-fns/locale';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
+import { getApiUrl } from '@/lib/config';
 
 interface JobStats {
   job_code: string;
@@ -288,7 +289,7 @@ export default function ReportsPage() {
       setExpandedJobs(newExpandedJobs);
       
       try {
-        const response = await fetch(`/api/reports/production-analysis?job_code=${jobCode}&limit=10000`);
+        const response = await fetch(getApiUrl(`/api/reports/production-analysis?job_code=${jobCode}&limit=10000`));
         const data = await response.json();
         
         if (data.success && data.data.jobs && data.data.jobs.length > 0) {

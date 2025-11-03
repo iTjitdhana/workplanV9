@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Loader2, Save, X } from 'lucide-react'
+import { getApiUrl } from '@/lib/config'
 
 interface MaterialData {
   id: number
@@ -57,12 +58,12 @@ export default function ProductionCostModal({
       setLoading(true)
       
       // ดึงข้อมูล BOM
-      const bomResponse = await fetch(`/api/logs/bom?fgCode=${workPlan.job_code}`)
+      const bomResponse = await fetch(getApiUrl(`/api/logs/bom?fgCode=${workPlan.job_code}`))
       const bomResult = await bomResponse.json()
       
       if (bomResult.success) {
         // ดึงข้อมูลต้นทุนการผลิตที่มีอยู่แล้ว
-        const costResponse = await fetch(`/api/logs/production-costs?workPlanId=${workPlan.id}&productionDate=${selectedDate}`)
+        const costResponse = await fetch(getApiUrl(`/api/logs/production-costs?workPlanId=${workPlan.id}&productionDate=${selectedDate}`))
         const costResult = await costResponse.json()
         
         let materialData = bomResult.data.map((item: any) => ({
@@ -117,7 +118,7 @@ export default function ProductionCostModal({
     try {
       setSaving(true)
       
-      const response = await fetch('/api/logs/production-costs', {
+      const response = await fetch(getApiUrl('/api/logs/production-costs'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

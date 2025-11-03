@@ -12,15 +12,15 @@ module.exports = {
       },
       env_production: {
         NODE_ENV: 'production',
-        PORT: 3101,
-        DB_HOST: '192.168.0.94',  // เปลี่ยนเป็น IP ของ database server
-        DB_USER: 'jitdhana',
-        DB_PASSWORD: 'iT12345$',
-        DB_NAME: 'esp_tracker',
-        DB_PORT: 3306,
-        API_RATE_LIMIT: 100,
-        PRODUCTION_HOST: '192.168.0.161',  // IP ของ server ที่รัน backend
-        CORS_ORIGINS: 'http://192.168.0.161:3011,http://192.168.0.94:3011'
+        PORT: process.env.PORT || 3101,
+        DB_HOST: process.env.DB_HOST,
+        DB_USER: process.env.DB_USER,
+        DB_PASSWORD: process.env.DB_PASSWORD,
+        DB_NAME: process.env.DB_NAME,
+        DB_PORT: Number(process.env.DB_PORT || 3306),
+        API_RATE_LIMIT: Number(process.env.API_RATE_LIMIT || 100),
+        PRODUCTION_HOST: process.env.PRODUCTION_HOST,
+        CORS_ORIGINS: process.env.CORS_ORIGINS
       },
       error_file: './logs/err.log',
       out_file: './logs/out.log',
@@ -40,10 +40,10 @@ module.exports = {
       },
       env_production: {
         NODE_ENV: 'production',
-        PORT: 3011,
-        NEXT_PUBLIC_API_URL: 'http://192.168.0.161:3101',  // เปลี่ยนเป็น IP ของ backend server
-        NEXT_PUBLIC_APP_ENV: 'production',
-        NEXT_PUBLIC_APP_VERSION: '1.0.0'
+        PORT: process.env.FRONTEND_PORT || 3011,
+        NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
+        NEXT_PUBLIC_APP_ENV: process.env.NEXT_PUBLIC_APP_ENV || 'production',
+        NEXT_PUBLIC_APP_VERSION: process.env.NEXT_PUBLIC_APP_VERSION || '1.0.0'
       },
       error_file: './logs/frontend-err.log',
       out_file: './logs/frontend-out.log',

@@ -9,7 +9,7 @@ interface Job {
   job_name: string;
   start_time: string;
   end_time: string;
-  user_name: string;
+  user_name?: string;
   operators?: string;
 }
 
@@ -28,133 +28,100 @@ interface TimeTableProps {
   onClose: () => void;
 }
 
-// ฟังก์ชันสร้างช่องเวลา 30 นาที
-function generateTimeSlots() {
-  const slots = [];
-  let currentTime = "08:00";
-  
-  while (currentTime < "17:00") {
-    const [hours, minutes] = currentTime.split(':').map(Number);
-    const nextMinutes = minutes + 30;
-    const nextHours = hours + Math.floor(nextMinutes / 60);
-    const finalMinutes = nextMinutes % 60;
-    const nextTime = `${nextHours.toString().padStart(2, '0')}:${finalMinutes.toString().padStart(2, '0')}`;
-    
-    slots.push(`${currentTime}-${nextTime}`);
-    
-    currentTime = nextTime;
+// ฟังก์ชันสร้างช่องเวลา 30 นาที (ใช้เวลาจุดเริ่มต้นแต่ละช่อง และเพิ่มช่วงพักเที่ยงพิเศษ)
+function generateTimeSlots(start = "08:00", end = "17:00", step = 30) {
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  const result: string[] = [];
+  let [h, m] = start.split(":").map(Number);
+  const [endH, endM] = end.split(":").map(Number);
+
+  while (h < endH || (h === endH && m < endM)) {
+    const timeSlot = `${pad(h)}:${pad(m)}`;
+
+    // ช่วงพักเที่ยง 12:30-13:15 เป็นคอลัมน์พิเศษ
+    if (timeSlot === "12:30") {
+      result.push("12:30-13:15");
+      h = 13;
+      m = 15;
+      continue;
+    }
+
+    result.push(timeSlot);
+    m += step;
+    if (m >= 60) { h++; m = m - 60; }
   }
-  
-  return slots;
+  return result;
 }
 
 // ฟังก์ชันเตรียมข้อมูลตารางเวลา
 function getTimeTableData(jobs: Job[], users: User[], sortBy: 'time' | 'name' = 'time') {
-  const mainUsers = users.filter(u => !["RD", "จรัญ", "พี่สัญญา"].includes(u.name));
+  const mainUsers = users.filter(u => !["RD", "พี่สัญญา"].includes(u.name));
   const timeSlots = generateTimeSlots();
-  
-  // เรียงลำดับพนักงาน
-  const sortedUsers = mainUsers.sort((a, b) => {
-    if (sortBy === 'name') {
-      if (a.name === "แมน") return -1;
-      if (b.name === "แมน") return 1;
-      if (a.name === "แจ็ค") return 1;
-      if (b.name === "แจ็ค") return -1;
-      return a.name.localeCompare(b.name);
-    } else {
-      // เรียงตามเวลาที่เริ่มงาน
-      const aJobs = jobs.filter(j => j.user_name === a.name).sort((x, y) => x.start_time.localeCompare(y.start_time));
-      const bJobs = jobs.filter(j => j.user_name === b.name).sort((x, y) => x.start_time.localeCompare(y.start_time));
-      
-      if (aJobs.length === 0 && bJobs.length === 0) return a.name.localeCompare(b.name);
-      if (aJobs.length === 0) return 1;
-      if (bJobs.length === 0) return -1;
-      
-      const aStartTime = aJobs[0].start_time;
-      const bStartTime = bJobs[0].start_time;
-      
-      if (aStartTime !== bStartTime) {
-        return aStartTime.localeCompare(bStartTime);
-      }
-      
-      return a.name.localeCompare(b.name);
+  const isLunchSlot = (slot: string) => slot.includes('-')
+  const idxForTime = (t: string) => {
+    for (let i = 0; i < timeSlots.length; i++) {
+      if (isLunchSlot(timeSlots[i])) continue
+      if (timeSlots[i] >= t) return i
     }
-  });
-  
-  // สร้างข้อมูลสำหรับแต่ละคน
+    return timeSlots.length - 1
+  }
+
+  // จัดลำดับผู้ใช้
+  const sortedUsers = mainUsers.sort((a, b) => {
+    if (sortBy === 'name') return a.name.localeCompare(b.name)
+    const aFirst = jobs.filter(j => j.user_name === a.name).map(j => j.start_time).sort()[0] || '99:99'
+    const bFirst = jobs.filter(j => j.user_name === b.name).map(j => j.start_time).sort()[0] || '99:99'
+    if (aFirst !== bFirst) return aFirst.localeCompare(bFirst)
+    return a.name.localeCompare(b.name)
+  })
+
   const data = sortedUsers.map(user => {
-    const userJobs = jobs.filter(job => job.user_name === user.name);
+    const userJobs = jobs.filter(job => job.user_name === user.name)
     const slots = timeSlots.map((slot, slotIndex) => {
-      // หางานที่ตรงกับ slot นี้
-      const matchingJob = userJobs.find(job => {
-        const jobStartTime = job.start_time.substring(0, 5);
-        const jobEndTime = job.end_time.substring(0, 5);
-        const slotStart = slot.split('-')[0];
-        const slotEnd = slot.split('-')[1];
-        
-        return slotStart >= jobStartTime && slotStart < jobEndTime;
-      });
-      
-      if (matchingJob) {
-        const jobStartTime = matchingJob.start_time.substring(0, 5);
-        const jobEndTime = matchingJob.end_time.substring(0, 5);
-        
-        // คำนวณ colspan
-        let jobStartSlotIndex = timeSlots.findIndex(s => s.split('-')[0] === jobStartTime);
-        if (jobStartSlotIndex === -1) {
-          jobStartSlotIndex = timeSlots.findIndex(s => s.split('-')[0] >= jobStartTime);
-        }
-        
-        let jobEndSlotIndex = timeSlots.findIndex(s => s.split('-')[1] > jobEndTime);
-        if (jobEndSlotIndex === -1) {
-          jobEndSlotIndex = timeSlots.findIndex(s => s.split('-')[0] > jobEndTime);
-        }
-        
-        const colspan = Math.max(1, jobEndSlotIndex - jobStartSlotIndex);
-        
-        // ตรวจสอบว่าเป็น slot แรกของงานนี้หรือไม่
-        const isStart = slotIndex === jobStartSlotIndex;
-        const isEnd = slotIndex === jobStartSlotIndex + colspan - 1;
-        
-        // ตรวจสอบว่าต้องแสดงพักเที่ยงหรือไม่
-        const isLunchBreak = slotIndex >= timeSlots.findIndex(s => s.split('-')[0] === "12:30") && 
-                            slotIndex <= timeSlots.findIndex(s => s.split('-')[0] === "13:30") &&
-                            !userJobs.some(job => {
-                              const jobStart = job.start_time.substring(0, 5);
-                              const jobEnd = job.end_time.substring(0, 5);
-                              return slot.split('-')[0] >= jobStart && slot.split('-')[0] < jobEnd;
-                            });
-        
+      // ช่วงพักเที่ยงพิเศษ
+      if (slot === '12:30-13:15') {
+        const jobCoversLunch = userJobs.some(j => (j.start_time <= '12:30' && j.end_time > '12:30'))
         return {
-          hasJob: true,
-          jobName: matchingJob.job_name,
-          jobCode: matchingJob.id,
-          isStart: isStart,
-          isEnd: isEnd,
-          colspan: colspan,
-          isLunchBreak: isLunchBreak
-        };
+          hasJob: false,
+          jobName: '',
+          jobCode: '',
+          isStart: false,
+          isEnd: false,
+          colspan: 1,
+          isLunchBreak: jobCoversLunch
+        }
       }
-      
-      // ตรวจสอบว่าต้องแสดงพักเที่ยงหรือไม่
-      const isLunchBreak = slotIndex >= timeSlots.findIndex(s => s.split('-')[0] === "12:30") && 
-                          slotIndex <= timeSlots.findIndex(s => s.split('-')[0] === "13:30");
-      
+
+      const job = userJobs.find(j => slot >= j.start_time && slot < j.end_time)
+      if (!job) {
+        return { hasJob: false, jobName: '', jobCode: '', isStart: false, isEnd: false, colspan: 1, isLunchBreak: false }
+      }
+
+      const startIndex = idxForTime(job.start_time)
+      let span = 0
+      for (let i = startIndex; i < timeSlots.length; i++) {
+        const s = timeSlots[i]
+        if (isLunchSlot(s)) break
+        if (s < job.end_time) span++
+        else break
+      }
+      const colspan = Math.max(1, span)
+      const isStart = slotIndex === startIndex
       return {
-        hasJob: false,
-        jobName: "",
-        jobCode: "",
-        isStart: false,
+        hasJob: true,
+        jobName: job.job_name,
+        jobCode: job.id,
+        isStart,
         isEnd: false,
-        colspan: 1,
-        isLunchBreak: isLunchBreak
-      };
-    });
-    
-    return { name: user.name, slots };
-  });
-  
-  return { timeSlots, data };
+        colspan: isStart ? colspan : 1,
+        isLunchBreak: false
+      }
+    })
+
+    return { name: user.name, slots }
+  })
+
+  return { timeSlots, data }
 }
 
 // ฟังก์ชันกำหนดสีให้กับงาน
@@ -183,6 +150,52 @@ const getJobColor = (jobName: string) => {
   return "bg-gray-400";
 };
 
+// Convert backend job item into list of operator names
+function extractOperatorNames(ops: any): string[] {
+  if (!ops) return []
+  if (typeof ops === 'string') {
+    return ops.split(/\s*,\s*/).filter(Boolean)
+  }
+  if (Array.isArray(ops)) {
+    return ops.map((o: any) => (typeof o === 'string' ? o : (o?.name || o?.id_code))).filter(Boolean)
+  }
+  // Support { operator1..4 }
+  const cand = [ops.operator1, ops.operator2, ops.operator3, ops.operator4].filter(Boolean)
+  return cand as string[]
+}
+
+// Expand each job to multiple entries per operator (user_name)
+function expandJobsByOperators(jobs: Job[]): Job[] {
+  const LUNCH_START = '12:30'
+  const LUNCH_END = '13:15'
+  const normalizeTime = (t: any) => {
+    if (!t) return ''
+    const s = String(t)
+    return s.length >= 5 ? s.slice(0,5) : s
+  }
+  const expanded: Job[] = []
+  for (const j of jobs) {
+    const names = extractOperatorNames((j as any).operators_from_join || j.operators)
+    if (names.length === 0) {
+      // keep as is if already has user_name
+      if (j.user_name) expanded.push({ ...j, start_time: normalizeTime(j.start_time), end_time: normalizeTime(j.end_time) })
+      continue
+    }
+    const s = normalizeTime(j.start_time)
+    const e = normalizeTime(j.end_time)
+    const splitForLunch = s < LUNCH_START && e > LUNCH_START
+    for (const name of names) {
+      if (splitForLunch) {
+        expanded.push({ ...j, user_name: name, start_time: s, end_time: LUNCH_START })
+        expanded.push({ ...j, user_name: name, start_time: LUNCH_END, end_time: e })
+      } else {
+        expanded.push({ ...j, user_name: name, start_time: s, end_time: e })
+      }
+    }
+  }
+  return expanded
+}
+
 export default function TimeTable({ 
   jobs, 
   users, 
@@ -193,10 +206,13 @@ export default function TimeTable({
   onClose 
 }: TimeTableProps) {
   const [sortBy, setSortBy] = useState<'time' | 'name'>('time');
-  
+
+  // Prepare jobs in the same way as TimeTablePopup (grouped by job but expanded by operators)
+  const jobsForGrid = useMemo(() => expandJobsByOperators(jobs), [jobs])
+
   const { timeSlots, data } = useMemo(() => 
-    getTimeTableData(jobs, users, sortBy), 
-    [jobs, users, sortBy]
+    getTimeTableData(jobsForGrid as any, users as any, sortBy), 
+    [jobsForGrid, users, sortBy]
   );
   
   return (

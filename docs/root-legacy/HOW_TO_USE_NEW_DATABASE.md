@@ -382,7 +382,7 @@ app.use('/api/products', require('./routes/productRoutes'));
 - [x] สร้างตัวแปร NEW_* ใน `.env.development`
 - [x] แก้ไข `backend/config/database.js`
 - [ ] สร้าง Database `manufacturing_system`
-- [ ] Import Structure จาก `structure_manufacturing_system.sql`
+- [ ] Import Structure จาก `database/sql/structure_manufacturing_system.sql`
 
 ### ✅ ทดสอบ
 
@@ -488,7 +488,7 @@ Error: Unknown database 'manufacturing_system'
 mysql -h 192.168.0.94 -u jitdhana -p -e "CREATE DATABASE manufacturing_system CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 
 # Import Structure
-mysql -h 192.168.0.94 -u jitdhana -p manufacturing_system < structure_manufacturing_system.sql
+mysql -h 192.168.0.94 -u jitdhana -p manufacturing_system < database/sql/structure_manufacturing_system.sql
 ```
 
 ### ปัญหา: Table doesn't exist
@@ -499,7 +499,7 @@ Error: Table 'manufacturing_system.products' doesn't exist
 **แก้ไข:**
 ```bash
 # Import โครงสร้างใหม่
-mysql -h 192.168.0.94 -u jitdhana -p manufacturing_system < structure_manufacturing_system.sql
+mysql -h 192.168.0.94 -u jitdhana -p manufacturing_system < database/sql/structure_manufacturing_system.sql
 ```
 
 ---
@@ -530,8 +530,8 @@ mysql -h 192.168.0.94 -u jitdhana -p manufacturing_system < structure_manufactur
 | `backend/.env.development` | ตัวแปร NEW_* สำหรับ DB ใหม่ |
 | `backend/test-new-db-connection.js` | ทดสอบ DB ใหม่ |
 | `backend/test-both-db-connections.js` | ทดสอบทั้ง 2 DB |
-| `DATABASE_MIGRATION_GUIDE.md` | คู่มือ Migration |
-| `DATABASE_STRUCTURE.md` | โครงสร้าง manufacturing_system |
+| `docs/root-legacy/DATABASE_MIGRATION_GUIDE.md` | คู่มือ Migration |
+| `docs/root-legacy/DATABASE_STRUCTURE.md` | โครงสร้าง manufacturing_system |
 
 ---
 
@@ -545,7 +545,7 @@ mysql -h 192.168.0.94 -u jitdhana -p manufacturing_system < structure_manufactur
 
 2. **สร้าง/Import Database** (ถ้ายังไม่มี)
    ```bash
-   mysql -h 192.168.0.94 -u jitdhana -p < structure_manufacturing_system.sql
+   mysql -h 192.168.0.94 -u jitdhana -p < database/sql/structure_manufacturing_system.sql
    ```
 
 3. **รัน Backend และดู Console**

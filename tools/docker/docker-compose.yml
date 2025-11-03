@@ -7,8 +7,8 @@ services:
       - "3011:3011"
     environment:
       - NODE_ENV=production
-      - NEXT_PUBLIC_API_URL=http://192.168.0.94:3101
-      - BACKEND_URL=http://backend:3101
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+      - BACKEND_URL=${BACKEND_URL:-http://backend:3101}
     depends_on:
       - backend
     restart: unless-stopped
@@ -23,11 +23,11 @@ services:
       - "3101:3101"
     environment:
       - NODE_ENV=production
-      - DB_HOST=192.168.0.94
-      - DB_USER=jitdhana
-      - DB_PASSWORD=iT12345$
-      - DB_NAME=esp_tracker
-      - DB_PORT=3306
+      - DB_HOST=${DB_HOST}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - DB_PORT=${DB_PORT:-3306}
     restart: unless-stopped
     networks:
       - workplan-network

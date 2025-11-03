@@ -16,8 +16,8 @@
 2. **ในเครื่องที่รัน Docker:**
    ```bash
    git pull origin main
-   docker-compose build
-   docker-compose up -d
+   docker compose -f infra/docker-compose.yml build
+   docker compose -f infra/docker-compose.yml up -d
    ```
 
 ### ข้อดี:
@@ -38,7 +38,7 @@
 2. **ในเครื่องที่รัน Docker:**
    ```bash
    docker pull your-registry.com/workplan-app:latest
-   docker-compose up -d
+   docker compose -f infra/docker-compose.yml up -d
    ```
 
 ### ข้อดี:
@@ -49,7 +49,7 @@
 ## 🔄 วิธีที่ 3: ใช้ Volume Mounting (Development)
 
 ### ขั้นตอน:
-1. **แก้ไข docker-compose.yml:**
+1. **แก้ไข infra/docker-compose.yml:**
    ```yaml
    services:
      frontend:
@@ -65,7 +65,7 @@
 
 2. **รัน Docker:**
    ```bash
-   docker-compose up -d
+   docker compose -f infra/docker-compose.yml up -d
    ```
 
 ### ข้อดี:
@@ -83,7 +83,7 @@
 
 2. **Restart Container:**
    ```bash
-   docker-compose restart
+   docker compose -f infra/docker-compose.yml restart
    ```
 
 ### ข้อดี:
@@ -103,7 +103,7 @@
 
 ### รัน Script:
 ```bash
-.\update-docker-deployment.bat
+.\u005cupdate-docker-deployment.bat
 ```
 
 ### เลือกวิธี:
@@ -116,13 +116,13 @@
 
 ### 1. ตรวจสอบ Containers:
 ```bash
-docker-compose ps
+docker compose -f infra/docker-compose.yml ps
 ```
 
 ### 2. ตรวจสอบ Logs:
 ```bash
-docker-compose logs frontend
-docker-compose logs backend
+docker compose -f infra/docker-compose.yml logs frontend
+docker compose -f infra/docker-compose.yml logs backend
 ```
 
 ### 3. ตรวจสอบเว็บไซต์:
@@ -136,12 +136,12 @@ docker-compose logs backend
 - Backup ข้อมูลก่อนอัปเดท
 
 ### 2. Environment Variables
-- ตรวจสอบ environment variables ใน docker-compose.yml
+- ตรวจสอบ environment variables ใน infra/docker-compose.yml
 - ปรับ IP address ให้ตรงกับเครื่อง
 
 ### 3. Port Conflicts
 - ตรวจสอบว่า ports ไม่ถูกใช้งานโดยโปรแกรมอื่น
-- ปรับ ports ใน docker-compose.yml ถ้าจำเป็น
+- ปรับ ports ใน infra/docker-compose.yml ถ้าจำเป็น
 
 ## 🚀 Best Practices
 

@@ -80,20 +80,33 @@ class LogController {
       
       // ไม่ต้องตรวจสอบ validation เลย เพื่อให้งานตวงสูตรทำงานได้
       const rawWpId = req.body.work_plan_id;
+      const workPlanId = (rawWpId === 4 || rawWpId === '4' || rawWpId === undefined || rawWpId === null)
+        ? null
+        : rawWpId;
+      
       const payload = {
         // แปลง 4 ให้เป็น NULL ภายในระบบ (ใช้ 4 เป็นโค้ดแทน NULL สำหรับงานตวงสูตร)
-        work_plan_id: (rawWpId === 4 || rawWpId === '4' || rawWpId === undefined || rawWpId === null)
-          ? null
-          : rawWpId,
+        work_plan_id: workPlanId,
         process_number: req.body.process_number,
         status: req.body.status,
         timestamp: req.body.timestamp
       };
       const log = await Log.create(payload);
       console.log('[DEBUG] Log.create result:', log);
+      
+      // Reload logs เพื่อให้ได้ข้อมูลที่คำนวณ start_time, stop_time, used_time แล้ว
+      let updatedProcessLog = null;
+      try {
+        const allLogs = await Log.getByWorkPlanId(workPlanId);
+        updatedProcessLog = allLogs.find(l => l.process_number === payload.process_number);
+        console.log('[DEBUG] Updated process log:', updatedProcessLog);
+      } catch (reloadError) {
+        console.warn('[DEBUG] Failed to reload logs, using basic log data:', reloadError.message);
+      }
+      
       res.status(201).json({
         success: true,
-        data: log,
+        data: updatedProcessLog || log,
         message: 'Log created successfully'
       });
     } catch (error) {

@@ -154,6 +154,16 @@ class WorkPlan {
       if (rows.length > 0) {
         console.log('📊 Sample work plan:', rows[0]);
         console.log('📊 All production dates found:', rows.map(r => r.production_date));
+        
+        // ✅ Debug: ตรวจสอบ operators สำหรับงาน A, B, C, D
+        const abcdPlans = rows.filter(r => ['A', 'B', 'C', 'D'].includes(r.job_code));
+        if (abcdPlans.length > 0) {
+          console.log('🔍 [DEBUG] A, B, C, D work plans operators:');
+          abcdPlans.forEach(plan => {
+            console.log(`  - ${plan.job_code}: operators="${plan.operators || ''}"`, 
+              `operators_from_join="${plan.operators_from_join || ''}"`);
+          });
+        }
       } else {
         console.log('⚠️ No work plans found for date:', date);
       }
@@ -275,7 +285,7 @@ class WorkPlan {
 
   // Helper function to format time
   static formatTime(timeString) {
-    if (!timeString) return timeString;
+    if (!timeString || timeString === '' || timeString === null) return null;
     
     // If already in HH:MM:SS format, return as is
     if (/^\d{1,2}:\d{2}:\d{2}$/.test(timeString)) {
@@ -297,6 +307,7 @@ class WorkPlan {
   }
 
   // สร้างงาน Default (ABCD) อัตโนมัติ
+  // ✅ ปรับปรุง: เช็คทีละ job_code แทนการเช็ครวม (ละเอียดและแม่นยำกว่า)
   static async createDefaultTasks(production_date) {
     const connection = await pool.getConnection();
     try {
@@ -306,23 +317,18 @@ class WorkPlan {
       
       console.log('🔍 Checking existing default tasks for:', formattedDate);
       
-      // เช็คว่ามีงาน default แล้วหรือยัง (ป้องกันสร้างซ้ำ)
+      // ✅ ปรับปรุง: เช็คทีละ job_code (ละเอียดกว่าเดิม)
+      // เช็คว่ามีงาน A, B, C, D ใดบ้างที่ยังไม่มีในวันนั้น
       const [existing] = await connection.execute(`
-        SELECT COUNT(*) as count 
+        SELECT job_code
         FROM work_plans 
-        WHERE DATE(production_date) = ? AND job_type = 'default'
+        WHERE DATE(production_date) = ? 
+          AND job_code IN ('A', 'B', 'C', 'D')
+          AND job_type = 'default'
       `, [formattedDate]);
       
-      if (existing[0].count > 0) {
-        console.log('⚠️ Default tasks already exist. Skip creation.');
-        await connection.commit();
-        return { 
-          success: true, 
-          message: 'Default tasks already exist',
-          created: false,
-          count: existing[0].count
-        };
-      }
+      const existingCodes = existing.map(row => row.job_code);
+      console.log('📋 Existing default tasks:', existingCodes);
       
       // สร้างงาน ABCD
       const defaultTasks = [
@@ -333,10 +339,17 @@ class WorkPlan {
       ];
       
       const createdIds = [];
+      const skippedCodes = [];
       
-      console.log('🆕 Creating 4 default tasks...');
-      
+      // ✅ สร้างเฉพาะงานที่ยังไม่มี
       for (const task of defaultTasks) {
+        if (existingCodes.includes(task.code)) {
+          console.log(`⏭️  Skipping ${task.code} - ${task.name} (already exists)`);
+          skippedCodes.push(task.code);
+          continue;
+        }
+        
+        console.log(`🆕 Creating ${task.code} - ${task.name}...`);
         const [result] = await connection.execute(`
           INSERT INTO work_plans 
           (production_date, job_code, job_name, job_type, workflow_status, status_id, is_printed, start_time, end_time)
@@ -349,12 +362,31 @@ class WorkPlan {
       
       await connection.commit();
       
-      console.log('🎉 Successfully created', createdIds.length, 'default tasks');
+      // สรุปผลลัพธ์
+      const totalCreated = createdIds.length;
+      const totalSkipped = skippedCodes.length;
+      
+      console.log(`🎉 Completed: Created ${totalCreated} tasks, Skipped ${totalSkipped} tasks`);
+      
+      if (totalCreated === 0 && totalSkipped > 0) {
+        return { 
+          success: true, 
+          message: `All default tasks already exist (${totalSkipped} tasks)`,
+          created: false,
+          createdCount: 0,
+          skippedCount: totalSkipped,
+          skippedCodes: skippedCodes,
+          createdIds: []
+        };
+      }
       
       return { 
         success: true, 
-        message: 'Default tasks created successfully',
-        created: true,
+        message: `Default tasks processed: ${totalCreated} created, ${totalSkipped} skipped`,
+        created: totalCreated > 0,
+        createdCount: totalCreated,
+        skippedCount: totalSkipped,
+        skippedCodes: skippedCodes,
         ids: createdIds 
       };
       
@@ -393,7 +425,15 @@ class WorkPlan {
       `, [formattedDate]);
       
       const isPrinted = syncLog[0].count > 0;
-      const job_type = isPrinted ? 'special' : 'regular';
+      // Backend เป็นแหล่งความจริงกำหนดชนิดงาน
+      // ถ้าเป็นงาน A/B/C/D ให้ถือเป็น default เสมอ (กันความผิดพลาดจาก client)
+      const defaultCodes = ['A', 'B', 'C', 'D'];
+      let job_type;
+      if (job_code && defaultCodes.includes(String(job_code).toUpperCase())) {
+        job_type = 'default';
+      } else {
+        job_type = isPrinted ? 'special' : 'regular';
+      }
       
       console.log('🖨️ Is printed?', isPrinted, '-> job_type:', job_type);
       

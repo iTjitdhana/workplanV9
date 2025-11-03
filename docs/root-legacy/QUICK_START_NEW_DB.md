@@ -34,7 +34,7 @@ exit
 
 ```bash
 # Import โครงสร้างตาราง
-mysql -h 192.168.0.94 -u jitdhana -p manufacturing_system < structure_manufacturing_system.sql
+mysql -h 192.168.0.94 -u jitdhana -p manufacturing_system < database/sql/structure_manufacturing_system.sql
 ```
 
 ### 3️⃣ ทดสอบ Connection
@@ -151,9 +151,9 @@ exports.getProcessTemplates = async (req, res) => {
 
 ## 📚 เอกสารเพิ่มเติม
 
-- **HOW_TO_USE_NEW_DATABASE.md** - คู่มือละเอียด พร้อมตัวอย่าง
-- **DATABASE_MIGRATION_GUIDE.md** - วิธี Migrate ข้อมูล
-- **DATABASE_STRUCTURE.md** - โครงสร้างตารางทั้งหมด
+- **docs/root-legacy/HOW_TO_USE_NEW_DATABASE.md** - คู่มือละเอียด พร้อมตัวอย่าง
+- **docs/root-legacy/DATABASE_MIGRATION_GUIDE.md** - วิธี Migrate ข้อมูล
+- **docs/root-legacy/DATABASE_STRUCTURE.md** - โครงสร้างตารางทั้งหมด
 
 ---
 

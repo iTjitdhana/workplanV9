@@ -8,8 +8,8 @@ services:
     environment:
       - NODE_ENV=production
       - TZ=Asia/Bangkok
-      - NEXT_PUBLIC_API_URL=http://192.168.0.96:3102
-      - BACKEND_URL=http://192.168.0.96:3102
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+      - BACKEND_URL=${BACKEND_URL}
     depends_on:
       - backend
     restart: unless-stopped
@@ -26,14 +26,14 @@ services:
       - "3102:3102"
     environment:
       - NODE_ENV=production
-      - PORT=3102
+      - PORT=${PORT:-3102}
       - TZ=Asia/Bangkok
-      - DB_HOST=192.168.0.94
-      - DB_USER=jitdhana
-      - DB_PASSWORD=iT12345$
-      - DB_NAME=esp_tracker
-      - DB_PORT=3306
-      - CORS_ORIGIN=http://192.168.0.96:3012
+      - DB_HOST=${DB_HOST}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - DB_PORT=${DB_PORT:-3306}
+      - CORS_ORIGIN=${CORS_ORIGIN}
     restart: unless-stopped
     networks:
       - workplan-network

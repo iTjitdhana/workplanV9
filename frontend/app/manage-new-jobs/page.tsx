@@ -14,6 +14,7 @@ import { toast } from '@/hooks/use-toast';
 import { format } from 'date-fns';
 import { th } from 'date-fns/locale';
 import { formatDateForDisplay } from '@/lib/dateUtils';
+import { getApiUrl } from '@/lib/config';
 
 interface NewJob {
   id: number;
@@ -24,6 +25,19 @@ interface NewJob {
 
 interface ProcessStep {
   id?: number;
+  process_number: number;
+  process_description: string;
+  worker_count?: number;
+}
+
+interface ExistingJob {
+  id: number;
+  job_code: string;
+  job_name: string;
+  production_date: string;
+}
+
+interface ApiProcessStep {
   process_number: number;
   process_description: string;
   worker_count?: number;
@@ -43,8 +57,9 @@ export default function ManageNewJobsPage() {
   const [isSearchDialogOpen, setIsSearchDialogOpen] = useState(false);
   const [searchType, setSearchType] = useState<'code' | 'name'>('code');
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchResults, setSearchResults] = useState<ExistingJob[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     fetchNewJobs();
@@ -53,7 +68,8 @@ export default function ManageNewJobsPage() {
   const fetchNewJobs = async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/new-jobs');
+      const response = await fetch(getApiUrl('/api/new-jobs'));
+      if (!response.ok) throw new Error('Network error');
       const data = await response.json();
       
       if (data.success) {
@@ -78,11 +94,12 @@ export default function ManageNewJobsPage() {
 
   const fetchProcessSteps = async (jobCode: string, jobName: string) => {
     try {
-      const response = await fetch(`/api/new-jobs/process-steps?job_code=${encodeURIComponent(jobCode)}&job_name=${encodeURIComponent(jobName)}`);
+      const response = await fetch(getApiUrl(`/api/new-jobs/process-steps?job_code=${encodeURIComponent(jobCode)}&job_name=${encodeURIComponent(jobName)}`));
+      if (!response.ok) throw new Error('Network error');
       const data = await response.json();
       
       if (data.success) {
-        setProcessSteps(data.data.map((step: any) => ({
+        setProcessSteps(data.data.map((step: ApiProcessStep) => ({
           process_number: step.process_number,
           process_description: step.process_description,
           worker_count: step.worker_count
@@ -111,12 +128,13 @@ export default function ManageNewJobsPage() {
     if (!editingJob) return;
 
     try {
+      setIsSaving(true);
       // กรอง Process Steps ที่มีข้อมูลครบ
       const validProcessSteps = processSteps.filter(step => 
         step.process_description.trim() && step.process_number > 0
       );
 
-      const response = await fetch(`/api/new-jobs`, {
+      const response = await fetch(getApiUrl(`/api/new-jobs`), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -154,6 +172,8 @@ export default function ManageNewJobsPage() {
         description: "Failed to update job",
         variant: "destructive"
       });
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -161,7 +181,7 @@ export default function ManageNewJobsPage() {
     if (!confirm('คุณแน่ใจหรือไม่ที่จะลบงานนี้?')) return;
 
     try {
-      const response = await fetch(`/api/new-jobs/${id}`, {
+      const response = await fetch(getApiUrl(`/api/new-jobs/${id}`), {
         method: 'DELETE',
       });
 
@@ -224,7 +244,8 @@ export default function ManageNewJobsPage() {
     
     try {
       setSearchLoading(true);
-      const response = await fetch(`/api/work-plans/search?${searchType}=${encodeURIComponent(searchQuery.trim())}`);
+      const response = await fetch(getApiUrl(`/api/work-plans/search?${searchType}=${encodeURIComponent(searchQuery.trim())}`));
+      if (!response.ok) throw new Error('Network error');
       const data = await response.json();
       
       if (data.success) {
@@ -251,31 +272,14 @@ export default function ManageNewJobsPage() {
   };
 
   // เลือกงานจากผลการค้นหา
-  const selectExistingJob = async (job: any) => {
+  const selectExistingJob = async (job: ExistingJob) => {
     setFormData({
       new_job_code: job.job_code,
       new_job_name: job.job_name,
       total_workers: 0
     });
     
-    // ดึง Process Steps ของงานที่เลือก
-    try {
-      const response = await fetch(`/api/new-jobs/process-steps?job_code=${encodeURIComponent(job.job_code)}&job_name=${encodeURIComponent(job.job_name)}`);
-      const data = await response.json();
-      
-      if (data.success) {
-        setProcessSteps(data.data.map((step: any) => ({
-          process_number: step.process_number,
-          process_description: step.process_description,
-          worker_count: step.worker_count
-        })));
-      } else {
-        setProcessSteps([]);
-      }
-    } catch (error) {
-      console.error('Failed to fetch process steps:', error);
-      setProcessSteps([]);
-    }
+    await fetchProcessSteps(job.job_code, job.job_name);
     
     setIsSearchDialogOpen(false);
     setSearchQuery('');
@@ -517,7 +521,7 @@ export default function ManageNewJobsPage() {
                    value={searchQuery}
                    onChange={(e) => setSearchQuery(e.target.value)}
                    placeholder={`พิมพ์${searchType === 'code' ? 'รหัสงาน' : 'ชื่องาน'}เพื่อค้นหา`}
-                   onKeyPress={(e) => e.key === 'Enter' && searchExistingJobs()}
+                   onKeyDown={(e) => e.key === 'Enter' && searchExistingJobs()}
                  />
                </div>
                <div className="flex items-end">
@@ -538,9 +542,9 @@ export default function ManageNewJobsPage() {
                    <h4 className="font-medium">ผลการค้นหา ({searchResults.length} รายการ)</h4>
                  </div>
                  <div className="max-h-60 overflow-y-auto">
-                   {searchResults.map((job, index) => (
+                  {searchResults.map((job) => (
                      <div
-                       key={index}
+                      key={job.id}
                        className="p-3 border-b hover:bg-gray-50 cursor-pointer"
                        onClick={() => selectExistingJob(job)}
                      >

@@ -1,4 +1,6 @@
 @echo off
+if not defined BACKEND_URL set BACKEND_URL=http://localhost:3101
+if not defined FRONTEND_URL set FRONTEND_URL=http://localhost:3012
 echo ========================================
 echo Running Production - Simple Mode
 echo ========================================
@@ -23,8 +25,8 @@ echo.
 echo ========================================
 echo ✅ Production servers started!
 echo ========================================
-echo Backend: http://192.168.0.94:3101
-echo Frontend: http://192.168.0.94:3012
+echo Backend: %BACKEND_URL%
+echo Frontend: %FRONTEND_URL%
 echo ========================================
 echo.
 echo Features:
