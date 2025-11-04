@@ -38,12 +38,15 @@ router.get('/audit-summary', RoleMenuController.getAuditSummary);
 
 // User Permission Routes
 // GET /api/me/permissions - ดึงสิทธิ์เมนูของผู้ใช้ปัจจุบัน
+// Support both absolute and relative mount paths
 router.get('/me/permissions', RoleMenuController.getUserMenuPermissions);
+router.get('/permissions', RoleMenuController.getUserMenuPermissions);
 
 // GET /api/me/permissions/:menuKey/check - ตรวจสอบสิทธิ์เมนูของผู้ใช้
 router.get('/me/permissions/:menuKey/check', RoleMenuController.checkUserPermission);
 
 // GET /api/me/bootstrap - ข้อมูล bootstrap สำหรับ SSR/เมนู
 router.get('/me/bootstrap', RoleMenuController.getBootstrap);
+router.get('/bootstrap', RoleMenuController.getBootstrap);
 
 module.exports = router;
