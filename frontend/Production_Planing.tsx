@@ -241,10 +241,34 @@ export default function MedicalAppointmentDashboard() {
   }, [isClient, selectedDate]);
   
 
-  // ตั้งค่า currentWeek หลัง client mount
+  // ตั้งค่า currentWeek หลัง client mount และให้สอดคล้องกับ selectedDate
   useEffect(() => {
-    if (isClient && !currentWeek) {
-      setCurrentWeek(new Date());
+    if (!isClient) return;
+    // ถ้ายังไม่มี currentWeek ให้ใช้ selectedDate ถ้ามี ไม่เช่นนั้นใช้วันนี้
+    if (!currentWeek) {
+      const base = selectedDate ? new Date(selectedDate) : new Date();
+      setCurrentWeek(base);
+      return;
+    }
+  }, [isClient, currentWeek, selectedDate]);
+
+  // เมื่อเปลี่ยนสัปดาห์จาก WeeklyCalendar ให้ sync กลับไปที่ selectedDate (ตั้งเป็นวันจันทร์ของสัปดาห์)
+  useEffect(() => {
+    if (!isClient || !currentWeek) return;
+    try {
+      const startOfWeek = new Date(currentWeek);
+      const day = startOfWeek.getDay();
+      const diff = startOfWeek.getDate() - day + (day === 0 ? -6 : 1); // Monday start
+      startOfWeek.setDate(diff);
+      const yyyy = startOfWeek.getFullYear();
+      const mm = String(startOfWeek.getMonth() + 1).padStart(2, '0');
+      const dd = String(startOfWeek.getDate()).padStart(2, '0');
+      const mondayStr = `${yyyy}-${mm}-${dd}`;
+      if (selectedDate !== mondayStr) {
+        setSelectedDate(mondayStr);
+      }
+    } catch (e) {
+      // no-op
     }
   }, [isClient, currentWeek]);
 
@@ -1145,6 +1169,35 @@ export default function MedicalAppointmentDashboard() {
   const [editDraftModalOpen, setEditDraftModalOpen] = useState(false);
   const [editDraftData, setEditDraftData] = useState<any | null>(null);
   const [editDraftId, setEditDraftId] = useState<string>("");
+  // Global confirmation modal state
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmTitle, setConfirmTitle] = useState<string>("ยืนยันการทำรายการ");
+  const [confirmMessage, setConfirmMessage] = useState<string>("");
+  const confirmResolverRef = useRef<(value: boolean) => void>();
+
+  // Show a confirmation dialog and return user's choice
+  const showConfirm = useCallback((message: string, title = "ยืนยันการทำรายการ") => {
+    setConfirmTitle(title);
+    setConfirmMessage(message);
+    setConfirmOpen(true);
+    return new Promise<boolean>((resolve) => {
+      confirmResolverRef.current = resolve;
+    });
+  }, []);
+
+  const handleConfirmYes = useCallback(() => {
+    setConfirmOpen(false);
+    const resolver = confirmResolverRef.current;
+    confirmResolverRef.current = undefined;
+    resolver?.(true);
+  }, []);
+
+  const handleConfirmNo = useCallback(() => {
+    setConfirmOpen(false);
+    const resolver = confirmResolverRef.current;
+    confirmResolverRef.current = undefined;
+    resolver?.(false);
+  }, []);
   
   // State สำหรับ modal แสดงรายละเอียดการผลิต
   const [productionDetailsModalOpen, setProductionDetailsModalOpen] = useState(false);
@@ -1267,6 +1320,7 @@ export default function MedicalAppointmentDashboard() {
       id: draftItem.id,
       job_name: draftItem.job_name,
       job_code: draftItem.job_code,
+      workflow_status: draftItem.workflow_status,
       operators: draftItem.operators || [],
       start_time: draftItem.start_time,
       end_time: draftItem.end_time,
@@ -1381,8 +1435,7 @@ export default function MedicalAppointmentDashboard() {
       if (data.success) {
         const successMessage = isDraft ? "บันทึกแบบร่างสำเร็จ" : "บันทึกเสร็จสิ้น";
         setMessage(successMessage);
-        setSuccessDialogMessage(successMessage);
-        setShowSuccessDialog(true);
+        // ไม่แสดง popup สำเร็จหลังบันทึกเสร็จสิ้น เพื่อไม่ขัด flow การใช้งาน
         setEditDraftModalOpen(false);
         await loadAllProductionData();
       } else {
@@ -1759,7 +1812,11 @@ export default function MedicalAppointmentDashboard() {
   const handleCancelProduction = async (workPlanId: string) => {
     debugLog('🔴 [DEBUG] handleCancelProduction called with workPlanId:', workPlanId);
     
-    if (!confirm("คุณต้องการยกเลิกการผลิตนี้หรือไม่?")) {
+    const accepted = await showConfirm(
+      "คุณต้องการยกเลิกการผลิตนี้หรือไม่?",
+      "ยืนยันการยกเลิกงานผลิต"
+    );
+    if (!accepted) {
       debugLog('🔴 [DEBUG] User cancelled the confirmation dialog');
       return;
     }
@@ -1832,6 +1889,31 @@ export default function MedicalAppointmentDashboard() {
     }
   };
 
+  // ลบงานจริง (work_plans) ใช้ได้เมื่อเป็น draft หรือ completed
+  const handleDeleteWorkPlan = async (workPlanId: string) => {
+    const accepted = await showConfirm("คุณต้องการลบงานนี้หรือไม่?", "ยืนยันการลบงาน");
+    if (!accepted) return;
+    setIsSubmitting(true);
+    setMessage("");
+    try {
+      const url = getApiUrl(`/api/work-plans/${workPlanId}`);
+      debugLog('🗑️ Deleting work plan at:', url);
+      const res = await fetch(url, { method: 'DELETE', headers: { 'Accept': 'application/json' } });
+      const text = await res.text();
+      let data: any = null; try { data = text ? JSON.parse(text) : null; } catch {}
+      if (!res.ok || data?.success === false) throw new Error(data?.message || `HTTP ${res.status}`);
+      setMessage('ลบงานสำเร็จ');
+      // ปิด modal ถ้าเปิดอยู่
+      setEditDraftModalOpen(false);
+      setEditDraftData(null);
+      await loadAllProductionData();
+    } catch (err: any) {
+      debugError('🗑️ Error deleting work plan:', err);
+      setMessage(err?.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อ API');
+    }
+    setIsSubmitting(false);
+  };
+
   // ฟังก์ชันช่วยแปลงเวลาจาก seconds เป็นรูปแบบที่อ่านได้
   const formatDuration = (seconds: number) => {
     if (!seconds) return "ไม่ระบุ";
@@ -1865,45 +1947,55 @@ export default function MedicalAppointmentDashboard() {
     debugLog('🗑️ Attempting to delete draft with ID:', draftId);
     debugLog('🗑️ Edit draft data:', editDraftData);
     
-    if (!confirm("คุณต้องการลบแบบร่างนี้หรือไม่? การดำเนินการนี้ไม่สามารถยกเลิกได้")) {
+    const accepted = await showConfirm(
+      "คุณต้องการลบแบบร่างนี้หรือไม่?",
+      "ยืนยันการลบแบบร่าง"
+    );
+    if (!accepted) {
       return;
     }
     
     setIsSubmitting(true);
     setMessage("");
     try {
-          const url = getApiUrl(`/api/work-plans/drafts/${draftId}`);
-      debugLog('🗑️ Making DELETE request to:', url);
-      const res = await fetch(url, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json", "Accept": "application/json" },
-        mode: 'cors'
-      });
-      debugLog('🗑️ Response status:', res.status);
-      
-      // ตรวจสอบ response ว่ามีเนื้อหาหรือไม่
-      const text = await res.text();
-      let data;
-      try {
-        data = text ? JSON.parse(text) : { success: false, message: 'Empty response' };
-      } catch (parseError) {
-        debugError('🗑️ JSON parse error:', parseError);
-        debugError('🗑️ Response text was:', text);
-        throw new Error(`Invalid JSON response: ${text.substring(0, 100)}`);
+      const isPrefixed = typeof editDraftData?.id === 'string' && editDraftData.id.startsWith('draft_');
+      const cleanId = isPrefixed ? editDraftData.id.replace('draft_', '') : draftId;
+
+      // พยายามลบทั้งสองปลายทางเพื่อความแน่นอน (ตาราง draft และตารางจริงที่เป็น draft)
+      const urls = [
+        getApiUrl(`/api/work-plans/drafts/${cleanId}`),
+        getApiUrl(`/api/work-plans/${cleanId}`),
+      ];
+
+      let anySuccess = false;
+      for (const u of urls) {
+        try {
+          debugLog('🗑️ Making DELETE request to:', u);
+          const res = await fetch(u, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            mode: 'cors'
+          });
+          debugLog('🗑️ Response status:', res.status, 'for', u);
+          const raw = await res.text();
+          let data: any = null;
+          try { data = raw ? JSON.parse(raw) : null; } catch {}
+          debugLog('🗑️ Response data:', data);
+          if (res.ok && (data?.success !== false)) {
+            anySuccess = true;
+          }
+        } catch (innerErr) {
+          debugError('🗑️ Delete attempt failed for', u, innerErr);
+          // ignore and try next endpoint
+        }
       }
-      
-      debugLog('🗑️ Response data:', data);
-      
-      if (!res.ok) {
-        throw new Error(data.message || `HTTP ${res.status}: ${res.statusText}`);
-      }
-      
-      if (data.success) {
-        setMessage("ลบแบบร่างสำเร็จ");
-        setEditDraftModalOpen(false); // ปิด modal
-        await loadAllProductionData(); // reload ข้อมูลหลังจากลบ
+
+      if (anySuccess) {
+        setMessage('ลบแบบร่างสำเร็จ');
+        setEditDraftModalOpen(false);
+        await loadAllProductionData();
       } else {
-        setMessage(data.message || "เกิดข้อผิดพลาดในการลบแบบร่าง");
+        throw new Error('ลบไม่สำเร็จทั้งสองปลายทาง');
       }
     } catch (err: any) {
       debugError('🗑️ Error deleting draft:', err);
@@ -2121,36 +2213,55 @@ export default function MedicalAppointmentDashboard() {
       setIsLoadingData(true);
       debugLog('🔄 Starting loadAllProductionData for date:', dateForLoad);
       
-      // โหลดข้อมูลสำหรับ weekly view (ไม่จำกัด limit)
-      debugLog('📅 Loading data for date:', dateForLoad);
-      
-      // เรียก API เดียว (ไม่ต้องแยก drafts แล้ว) และลดขนาด payload
-      const plansResponse = await fetch(getApiUrl(`/api/work-plans?date=${dateForLoad}&limit=100`));
-      
-      // ตรวจสอบว่า response เป็น JSON หรือไม่
-      if (!plansResponse.ok) {
-        const text = await plansResponse.text();
-        debugError('❌ API Error Response:', text.substring(0, 200));
-        throw new Error(`API error: ${plansResponse.status} ${plansResponse.statusText}`);
-      }
-      
-      const contentType = plansResponse.headers.get('content-type');
-      if (!contentType || !contentType.includes('application/json')) {
-        const text = await plansResponse.text();
-        debugError('❌ Response is not JSON:', text.substring(0, 200));
-        throw new Error('Response is not JSON');
-      }
-      
-      const plans = await plansResponse.json();
-      
-      debugLog('📊 Loaded plans for selected date:', plans.data?.length || 0);
+      // โหลดข้อมูลสำหรับ weekly view: ดึงข้อมูลวันจันทร์-เสาร์ของสัปดาห์ที่เลือกแบบขนาน
+      debugLog('📅 Loading weekly data for base date:', dateForLoad);
+
+      // คำนวณช่วงวันที่ของสัปดาห์ (จันทร์-เสาร์)
+      const baseDate = new Date(dateForLoad);
+      const baseDay = baseDate.getDay();
+      const baseDiff = baseDate.getDate() - baseDay + (baseDay === 0 ? -6 : 1);
+      const monday = new Date(baseDate);
+      monday.setDate(baseDiff);
+      const weekDatesStr: string[] = Array.from({ length: 6 }).map((_, i) => {
+        const d = new Date(monday);
+        d.setDate(monday.getDate() + i);
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const dayNum = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${dayNum}`;
+      });
+
+      const weeklyResponses = await Promise.all(
+        weekDatesStr.map(d => 
+          fetch(getApiUrl(`/api/work-plans?date=${d}&limit=100&_ts=${Date.now()}`), { cache: 'no-store' })
+        )
+      );
+
+      const weeklyJson = await Promise.all(
+        weeklyResponses.map(async (res, idx) => {
+          if (!res.ok) {
+            const text = await res.text();
+            debugError(`❌ API Error for ${weekDatesStr[idx]}:`, text.substring(0, 200));
+            return { data: [] };
+          }
+          const ct = res.headers.get('content-type');
+          if (!ct || !ct.includes('application/json')) {
+            const text = await res.text();
+            debugError(`❌ Non-JSON for ${weekDatesStr[idx]}:`, text.substring(0, 200));
+            return { data: [] };
+          }
+          return res.json();
+        })
+      );
+
+      const plans = { data: weeklyJson.flatMap((j: any) => j?.data || []) } as any;
+      debugLog('📊 Loaded weekly plans total:', plans.data?.length || 0);
       
       // อัปเดต pagination info
-      if (plans.pagination) {
-        setCurrentPage(plans.pagination.page);
-        setTotalPages(plans.pagination.totalPages);
-        setHasNextPage(plans.pagination.hasNextPage);
-      }
+      // สำหรับ weekly view เราอาจไม่มี pagination ที่รวมกันได้ จึง reset ค่าพื้นฐาน
+      setCurrentPage(1);
+      setTotalPages(1);
+      setHasNextPage(false);
       
       // โหลดข้อมูลเพิ่มเติมสำหรับ weekly view ใน background
       setTimeout(() => {
@@ -3562,7 +3673,6 @@ export default function MedicalAppointmentDashboard() {
                     onTaskReorder={handleTaskReorder}
                     onTaskClick={(task) => handleEditClick(convertToProductionItem(task))}
                     onDateClick={(date) => console.log('Date clicked:', date)}
-                    onAddTask={(date, index) => handleQuickAdd(date)}
                     showWeekNavigation={true}
                     showTaskCount={true}
                   />
@@ -3800,7 +3910,7 @@ export default function MedicalAppointmentDashboard() {
                                         </>
                                       )}
                                       {/* เพิ่มปุ่มสำหรับรายการที่มี จิ๋ว, จรัญ ในการตรวจสอบ */}
-                                      {(item.recordStatus === "บันทึกเสร็จสิ้น" || item.recordStatus === "เสร็จสิ้น" || item.recordStatus === "บันทึกสำเร็จ") && (
+                                      {(item.recordStatus === "บันทึกเสร็จสิ้น" || item.recordStatus === "เสร็จสิ้น" || item.recordStatus === "บันทึกสำเร็จ" || item.recordStatus === "พิมพ์แล้ว") && (
                                         <>
                                       {/* แสดงปุ่มรูปตาสำหรับงานที่มีสถานะ "กำลังดำเนินการ" */}
                                       {getJobStatus(item) === "กำลังดำเนินการ" && (
@@ -4155,11 +4265,9 @@ export default function MedicalAppointmentDashboard() {
                 );
               }
 
-              // กรณีบันทึกเสร็จสิ้น: แสดงปุ่มยกเลิกงาน (status_id = 9)
-              const isCompletedRecord =
-                editDraftData.workflow_status === 'completed' ||
-                editDraftData.workflow_status_id === 2;
-              if (isCompletedRecord && editDraftData.id) {
+              // ถ้าเป็นงานพิมพ์แล้ว ให้แสดงปุ่มยกเลิกงาน
+              const isPrintedRecord = editDraftData.workflow_status === 'printed';
+              if (isPrintedRecord && editDraftData.id) {
                 return (
                   <Button
                     variant="destructive"
@@ -4172,6 +4280,23 @@ export default function MedicalAppointmentDashboard() {
                 );
               }
 
+              // ถ้าเป็นงานบันทึกเสร็จสิ้น ให้แสดงปุ่มลบ
+              const isCompletedRecord =
+                editDraftData.workflow_status === 'completed' ||
+                editDraftData.workflow_status_id === 2;
+              if (isCompletedRecord && editDraftData.id) {
+                return (
+                  <Button
+                    variant="destructive"
+                    onClick={() => handleDeleteWorkPlan(String(editDraftData.id))}
+                    disabled={isSubmitting}
+                    className={`bg-red-600 hover:bg-red-700 text-white ${notoSansThai.className}`}
+                  >
+                    {isSubmitting ? "กำลังลบ..." : "ลบ"}
+                  </Button>
+                );
+              }
+
               return null;
             })()}
             <div className="flex gap-2">
@@ -4180,6 +4305,22 @@ export default function MedicalAppointmentDashboard() {
                 {isSubmitting ? "กำลังบันทึก..." : "บันทึกเสร็จสิ้น"}
               </Button>
             </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Global Confirmation Modal */}
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className={`${notoSansThai.className}`}>{confirmTitle}</DialogTitle>
+          </DialogHeader>
+          <div className="py-2">
+            <p className={`${notoSansThai.className}`}>{confirmMessage}</p>
+          </div>
+          <DialogFooter className="flex gap-2">
+            <Button variant="outline" onClick={handleConfirmNo} className={notoSansThai.className}>ยกเลิก</Button>
+            <Button onClick={handleConfirmYes} className={`bg-red-600 hover:bg-red-700 text-white ${notoSansThai.className}`}>ตกลง</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

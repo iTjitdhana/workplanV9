@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { config } from '@/lib/config';
 
-const API_BASE_URL = process.env.BACKEND_URL || config.api.baseUrl;
+const API_BASE_URL = config.api.baseUrl;
 
 export async function PATCH(
   request: NextRequest,

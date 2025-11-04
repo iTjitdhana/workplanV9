@@ -9,23 +9,31 @@ export async function PATCH(
 ) {
   try {
     const { id } = await params;
-    const body = await request.json();
-    
-    const response = await fetch(`${API_BASE_URL}/api/work-plans/${id}/status`, {
+
+    const response = await fetch(`${API_BASE_URL}/api/work-plans/${id}/cancel`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(body),
     });
 
+    if (!response.ok) {
+      const errorText = await response.text();
+      return NextResponse.json(
+        { success: false, message: `Backend API error: ${response.status} ${errorText}` },
+        { status: response.status }
+      );
+    }
+
     const data = await response.json();
-    return NextResponse.json(data, { status: response.status });
+    return NextResponse.json(data);
   } catch (error) {
-    console.error('Error updating work plan status:', error);
+    console.error('Error cancelling work plan:', error);
     return NextResponse.json(
-      { success: false, message: 'Failed to update work plan status' },
+      { success: false, message: 'Failed to cancel work plan' },
       { status: 500 }
     );
   }
-} 
+}
+
+

@@ -4,12 +4,12 @@
   "description": "Backend API for ESP Tracker system",
   "main": "server.js",
   "scripts": {
-    "start": "NODE_ENV=production node server.js",
-    "dev": "NODE_ENV=development nodemon server.js",
-    "start:ip": "NODE_ENV=production node server.js",
-    "dev:ip": "NODE_ENV=development nodemon server.js",
-    "start:prod": "NODE_ENV=production node server.js",
-    "dev:prod": "NODE_ENV=production nodemon server.js",
+    "start": "cross-env NODE_ENV=production node server.js",
+    "dev": "cross-env NODE_ENV=development nodemon server.js",
+    "start:ip": "cross-env NODE_ENV=production node server.js",
+    "dev:ip": "cross-env NODE_ENV=development nodemon server.js",
+    "start:prod": "cross-env NODE_ENV=production node server.js",
+    "dev:prod": "cross-env NODE_ENV=production nodemon server.js",
     "test": "jest",
     "test:watch": "jest --watch",
     "lint": "eslint .",
@@ -29,6 +29,7 @@
     "node-fetch": "^2.7.0"
   },
   "devDependencies": {
+    "cross-env": "^7.0.3",
     "eslint": "^8.57.0",
     "jest": "^29.7.0",
     "nodemon": "^3.0.1",

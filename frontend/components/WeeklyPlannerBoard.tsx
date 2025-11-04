@@ -124,12 +124,14 @@ export const WeeklyPlannerBoard: React.FC<WeeklyPlannerBoardProps> = ({
             <div className={`mt-1 text-xs ${getDayTextColor(date)} opacity-80`}>
               {(dayJobs[formatDateForAPI(date)] || []).length} งาน
             </div>
-            <button
-              className="mt-2 text-xs px-2 py-1 bg-white/70 hover:bg-white rounded border border-white/40"
-              onClick={() => onAddJob && onAddJob(formatDateForAPI(date))}
-            >
-              + เพิ่มงาน
-            </button>
+            {onAddJob && (
+              <button
+                className="mt-2 text-xs px-2 py-1 bg-white/70 hover:bg-white rounded border border-white/40"
+                onClick={() => onAddJob && onAddJob(formatDateForAPI(date))}
+              >
+                + เพิ่มงาน
+              </button>
+            )}
           </div>
         ))}
       </div>

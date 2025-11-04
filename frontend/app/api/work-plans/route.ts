@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { config } from '@/lib/config';
 import { createErrorResponse, createInternalServerErrorResponse } from '@/lib/api';
 
-const API_BASE_URL = process.env.BACKEND_URL || config.api.baseUrl;
+const API_BASE_URL = config.api.baseUrl;
 
 export async function GET(request: NextRequest) {
   try {
@@ -60,7 +60,9 @@ export async function GET(request: NextRequest) {
     // เพิ่ม cache headers สำหรับข้อมูลที่ไม่เปลี่ยนบ่อย
     return NextResponse.json(data, {
       headers: {
-        'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600', // Cache 5 นาที
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
         'X-Content-Type-Options': 'nosniff'
       }
     });

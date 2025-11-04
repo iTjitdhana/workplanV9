@@ -243,6 +243,8 @@ class WorkPlan {
           DATE_FORMAT(wp.production_date, '%Y-%m-%d') as production_date,
           wp.job_code,
           wp.job_name,
+          wp.job_type,
+          wp.workflow_status,
           wp.start_time,
           wp.end_time,
           wp.notes,

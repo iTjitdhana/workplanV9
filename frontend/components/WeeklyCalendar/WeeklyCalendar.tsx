@@ -226,12 +226,14 @@ export const WeeklyCalendar: React.FC<WeeklyCalendarProps> = ({
                 <div className="mt-1 text-xs opacity-80">
                   {getDayTaskCount(weekDate.dateStr)} งาน
                 </div>
-                <button
-                  className="mt-2 text-xs px-2 py-1 bg-white/70 hover:bg-white rounded border border-white/40"
-                  onClick={() => onAddTask && onAddTask(weekDate.dateStr, 0)}
-                >
-                  + เพิ่มงาน
-                </button>
+                {onAddTask && (
+                  <button
+                    className="mt-2 text-xs px-2 py-1 bg-white/70 hover:bg-white rounded border border-white/40"
+                    onClick={() => onAddTask && onAddTask(weekDate.dateStr, 0)}
+                  >
+                    + เพิ่มงาน
+                  </button>
+                )}
               </div>
             ))}
           </div>

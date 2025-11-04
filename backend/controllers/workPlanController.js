@@ -313,10 +313,20 @@ class WorkPlanController {
         });
       }
       
-      // ป้องกันการลบ work plan (ตามข้อกำหนด After 18:00 Management)
+      // อนุญาตให้ลบเมื่อ workflow_status เป็น 'draft' หรือ 'completed'
+      const status = String(workPlan.workflow_status || '').toLowerCase();
+      if (status === 'draft' || status === 'completed') {
+        const deleted = await WorkPlan.delete(id);
+        if (deleted) {
+          return res.json({ success: true, message: 'Draft work plan deleted successfully' });
+        }
+        return res.status(400).json({ success: false, message: 'Failed to delete work plan' });
+      }
+      
+      // กรณีไม่ใช่ draft ให้บล็อคการลบ และแนะนำให้ใช้ "ยกเลิกการผลิต"
       return res.status(403).json({
         success: false,
-        message: 'ไม่สามารถลบงานผลิตได้ เนื่องจากงานในตารางจริงไม่สามารถลบได้หลัง 18:00 น. กรุณาใช้ฟังก์ชัน "ยกเลิกการผลิต" แทน'
+        message: 'ไม่สามารถลบงานผลิตที่พิมพ์แล้วได้ กรุณาใช้ "ยกเลิกการผลิต" แทน'
       });
       
     } catch (error) {
