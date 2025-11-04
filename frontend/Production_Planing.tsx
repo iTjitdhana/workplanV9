@@ -3051,30 +3051,36 @@ export default function MedicalAppointmentDashboard() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-64 bg-white border border-gray-200 shadow-lg">
-                  {process.env.NEXT_PUBLIC_LOGS_URL ? (
-                    <DropdownMenuItem asChild>
-                      <a
-                        href={process.env.NEXT_PUBLIC_LOGS_URL}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center space-x-2 p-2 hover:bg-gray-100 rounded cursor-pointer"
-                      >
-                        <span>ระบบประวัติการผลิต</span>
-                      </a>
-                    </DropdownMenuItem>
-                  ) : null}
-                  {process.env.NEXT_PUBLIC_SCHEDULE_URL ? (
-                    <DropdownMenuItem asChild>
-                      <a
-                        href={process.env.NEXT_PUBLIC_SCHEDULE_URL}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center space-x-2 p-2 hover:bg-gray-100 rounded cursor-pointer"
-                      >
-                        <span>ตารางงานและกระบวนการผลิตสินค้าครัวกลาง</span>
-                      </a>
-                    </DropdownMenuItem>
-                  ) : null}
+                  {(() => {
+                    const LOGS_URL = process.env.NEXT_PUBLIC_LOGS_URL || 'http://192.168.0.96:3014/logs';
+                    return (
+                      <DropdownMenuItem asChild>
+                        <a
+                          href={LOGS_URL}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center space-x-2 p-2 hover:bg-gray-100 rounded cursor-pointer"
+                        >
+                          <span>ระบบประวัติการผลิต</span>
+                        </a>
+                      </DropdownMenuItem>
+                    );
+                  })()}
+                  {(() => {
+                    const SCHEDULE_URL = process.env.NEXT_PUBLIC_SCHEDULE_URL || 'http://192.168.0.96:3019/';
+                    return (
+                      <DropdownMenuItem asChild>
+                        <a
+                          href={SCHEDULE_URL}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center space-x-2 p-2 hover:bg-gray-100 rounded cursor-pointer"
+                        >
+                          <span>ตารางงานและกระบวนการผลิตสินค้าครัวกลาง</span>
+                        </a>
+                      </DropdownMenuItem>
+                    );
+                  })()}
                   <DropdownMenuItem
                     onClick={() => setShowTimeTable(true)}
                     className="flex items-center space-x-2 p-2 cursor-pointer"
