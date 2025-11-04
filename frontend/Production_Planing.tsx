@@ -252,9 +252,10 @@ export default function MedicalAppointmentDashboard() {
     }
   }, [isClient, currentWeek, selectedDate]);
 
-  // เมื่อเปลี่ยนสัปดาห์จาก WeeklyCalendar ให้ sync กลับไปที่ selectedDate (ตั้งเป็นวันจันทร์ของสัปดาห์)
+  // เมื่อเปลี่ยนสัปดาห์จาก WeeklyCalendar ให้ sync วันที่เฉพาะตอนอยู่โหมดรายสัปดาห์เท่านั้น
   useEffect(() => {
     if (!isClient || !currentWeek) return;
+    if (viewMode !== "weekly") return; // อย่าปรับวันที่ในโหมดรายวัน/ตอนปิด popup
     try {
       const startOfWeek = new Date(currentWeek);
       const day = startOfWeek.getDay();
@@ -270,7 +271,7 @@ export default function MedicalAppointmentDashboard() {
     } catch (e) {
       // no-op
     }
-  }, [isClient, currentWeek]);
+  }, [isClient, currentWeek, viewMode]);
 
   // ตั้งค่า userName หลัง client mount
   useEffect(() => {
