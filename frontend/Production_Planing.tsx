@@ -3085,8 +3085,8 @@ export default function MedicalAppointmentDashboard() {
                     onClick={() => setShowTimeTable(true)}
                     className="flex items-center space-x-2 p-2 cursor-pointer"
                   >
-                    <Clock className="w-4 h-4 text-green-600" />
-                    <span>แสดงตารางเวลา</span>
+                    
+                    <span>แสดงตารางเวลาการทำงาน</span>
                   </DropdownMenuItem>
                 </DropdownMenuContent>
                   </DropdownMenu>
