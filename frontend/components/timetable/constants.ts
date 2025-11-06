@@ -1,0 +1,43 @@
+/**
+ * Constants for TimeTable component
+ */
+
+export const TIMETABLE_CONSTANTS = {
+  WORK_HOURS: {
+    START: '08:00',
+    END: '17:00',
+    STEP: 30,
+  },
+  LUNCH_BREAK: {
+    START: '12:30',
+    END: '13:15',
+    LABEL: '12:30-13:15',
+  },
+  LAYOUT: {
+    HEADER_HEIGHT_RATIO: 0.08,
+    FOOTER_HEIGHT_RATIO: 0.05,
+    CONTENT_HEIGHT_RATIO: 0.87,
+    NAME_COL_MIN_WIDTH: 140,
+    NAME_COL_MAX_WIDTH: 240,
+    NAME_COL_WIDTH_RATIO: 0.10,
+    CLOSE_BUTTON_SIZE: 48,
+    BASE_LANE_MIN: 30,
+    BASE_LANE_MAX: 52,
+    BASE_LANE_DIVISOR: 10,
+    ROW_HEIGHT_PADDING: 16,
+    BLOCK_PADDING: 3,
+    BLOCK_MIN_HEIGHT: 12,
+    BLOCK_HEIGHT_MULTIPLIER: 1.1,
+  },
+  EXCLUDED_OPERATORS: ['RD', 'พี่สัญญา'] as const,
+  DEFAULT_JOB_CODES: ['A', 'B', 'C', 'D'] as const,
+  COLOR: {
+    MIN_HUE_GAP: 38, // degrees
+    GOLDEN_ANGLE: 137.508,
+    MAX_HUE_ATTEMPTS: 720,
+    SATURATION_OPTIONS: [60, 68, 72],
+    LIGHTNESS_OPTIONS: [82, 76, 70],
+    DEFAULT_COLOR: 'hsl(210, 20%, 85%)',
+  },
+} as const;
+
