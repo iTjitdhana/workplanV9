@@ -194,14 +194,18 @@ function getTimeTableData(jobs: TimeTableJob[], users: User[]): TimeTableData {
   
   // 3. เรียงลำดับคนตามเวลางานแรก แล้วสร้างข้อมูลแถว
   const sortedWorkers = Object.keys(personJobMap).sort((a, b) => {
-    const aJobs = personJobMap[a].sort((x, y) => x.start_time.localeCompare(y.start_time));
-    const bJobs = personJobMap[b].sort((x, y) => x.start_time.localeCompare(y.start_time));
+    const aJobs = personJobMap[a].sort((x, y) => 
+      (x.start_time || '').localeCompare(y.start_time || '')
+    );
+    const bJobs = personJobMap[b].sort((x, y) => 
+      (x.start_time || '').localeCompare(y.start_time || '')
+    );
     
     if (aJobs.length === 0 && bJobs.length === 0) return a.localeCompare(b);
     if (aJobs.length === 0) return 1;
     if (bJobs.length === 0) return -1;
     
-    const timeCompare = aJobs[0].start_time.localeCompare(bJobs[0].start_time);
+    const timeCompare = (aJobs[0].start_time || '').localeCompare(bJobs[0].start_time || '');
     if (timeCompare !== 0) return timeCompare;
     return a.localeCompare(b);
   });
@@ -236,7 +240,9 @@ function getTimeTableData(jobs: TimeTableJob[], users: User[]): TimeTableData {
       // หางานที่ตรงกับ slot นี้
       const matchingJob = workerJobs.find(job => {
         const slotStart = slot;
-        return slotStart >= job.start_time && slotStart < job.end_time;
+        const jobStart = job.start_time || '';
+        const jobEnd = job.end_time || '';
+        return slotStart >= jobStart && slotStart < jobEnd;
       });
       
       if (matchingJob) {
