@@ -424,7 +424,7 @@ function TimeTable({ jobs, users }: { jobs: TimeTableJob[], users: User[] }) {
             {timeSlots.map((slot, idx) => (
               <th 
                 key={slot} 
-                      className={`px-2 py-1 leading-tight text-center font-semibold text-sm md:text-lg border-r border-gray-200 h-9 whitespace-nowrap ${
+                className={`px-2 py-1 leading-tight text-center font-semibold text-xs md:text-sm lg:text-lg border-r border-gray-200 h-9 whitespace-nowrap ${
                   isLunchSlot(slot)
                     ? "bg-gradient-to-b from-orange-200 to-orange-100 text-orange-900" 
                     : "bg-gradient-to-b from-green-100 to-green-50 text-green-900"
@@ -434,11 +434,11 @@ function TimeTable({ jobs, users }: { jobs: TimeTableJob[], users: User[] }) {
                 <div className="flex flex-col items-center">
                   {isLunchSlot(slot) ? (
                     <>
-                      <span className="font-bold whitespace-nowrap">พักเที่ยง</span>
-                      <span className="text-[10px] md:text-xs">{TIMETABLE_CONSTANTS.LUNCH_BREAK.LABEL}</span>
+                      <span className="font-bold whitespace-nowrap text-[10px] md:text-xs lg:text-sm">พักเที่ยง</span>
+                      <span className="text-[8px] md:text-[10px] lg:text-xs">{TIMETABLE_CONSTANTS.LUNCH_BREAK.LABEL}</span>
                     </>
                   ) : (
-                    <span className="whitespace-nowrap">{formatTimeSlotLabel(slot)}</span>
+                    <span className="whitespace-nowrap text-[10px] md:text-xs lg:text-sm">{formatTimeSlotLabel(slot)}</span>
                   )}
                 </div>
               </th>
