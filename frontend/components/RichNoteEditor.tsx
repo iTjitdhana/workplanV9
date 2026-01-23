@@ -54,9 +54,16 @@ const RichNoteEditor: React.FC<RichNoteEditorProps> = ({ value, onChange, classN
     if (!editor) return;
     // Only sync external value when editor is not focused to avoid jitter
     const current = editor.getText();
-    if (!editor.isFocused && (value || "") !== current && lastExternalValueRef.current !== value) {
-      lastExternalValueRef.current = value || "";
-      editor.commands.setContent((value || "").replace(/\n/g, "<br>") || "");
+    const incoming = value || "";
+    const shouldForceUpdate = incoming === "";
+
+    if ((shouldForceUpdate || !editor.isFocused) && incoming !== current && lastExternalValueRef.current !== value) {
+      lastExternalValueRef.current = incoming;
+      if (incoming === "") {
+        editor.commands.clearContent(true);
+      } else {
+        editor.commands.setContent(incoming.replace(/\n/g, "<br>"));
+      }
     }
   }, [value, editor]);
 

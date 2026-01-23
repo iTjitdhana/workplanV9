@@ -16,21 +16,44 @@ router.get('/search', async (req, res) => {
       });
     }
 
-    // ค้นหาจาก job_code หรือ job_name
-    const query_sql = `
+    const searchTerm = `%${query}%`;
+    const results = [];
+
+    // 1. ค้นหาจาก process_steps (มีสูตร)
+    const processStepsSql = `
       SELECT DISTINCT job_code, job_name
       FROM process_steps
       WHERE job_code LIKE ? OR job_name LIKE ?
       ORDER BY job_code
       LIMIT 10
     `;
-    
-    const searchTerm = `%${query}%`;
-    const [rows] = await pool.execute(query_sql, [searchTerm, searchTerm]);
+    const [processStepsRows] = await pool.execute(processStepsSql, [searchTerm, searchTerm]);
+    if (processStepsRows && processStepsRows.length > 0) {
+      results.push(...processStepsRows);
+    }
+
+    // 2. ค้นหาจาก fg table (ตารางสินค้าสำเร็จรูป - มีสูตรใน fg_bom)
+    const fgSql = `
+      SELECT DISTINCT FG_Code AS job_code, FG_Name AS job_name
+      FROM fg
+      WHERE FG_Code LIKE ? OR FG_Name LIKE ?
+      ORDER BY FG_Code
+      LIMIT 10
+    `;
+    const [fgRows] = await pool.execute(fgSql, [searchTerm, searchTerm]);
+    if (fgRows && fgRows.length > 0) {
+      // กรองข้อมูลที่ซ้ำกับ process_steps แล้ว
+      const existingCodes = new Set(results.map(r => r.job_code));
+      const newFgRows = fgRows.filter(r => !existingCodes.has(r.job_code));
+      results.push(...newFgRows);
+    }
+
+    // จำกัดผลลัพธ์ทั้งหมดไม่เกิน 10 รายการ
+    const finalResults = results.slice(0, 10);
     
     res.json({
       success: true,
-      data: rows
+      data: finalResults
     });
   } catch (error) {
     console.error('Error searching process steps:', error);

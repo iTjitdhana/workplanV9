@@ -3,8 +3,16 @@
 export const config = {
   // API Configuration
   api: {
-    // Resolve from environment only; no localhost fallback for production builds
-    baseUrl: (process.env.NEXT_PUBLIC_API_URL ?? process.env.BACKEND_URL ?? ''),
+    // Use relative path if no baseUrl is set (for same-origin requests through Nginx)
+    // Otherwise use the configured URL
+    baseUrl: (() => {
+      const envUrl = process.env.NEXT_PUBLIC_API_URL ?? process.env.BACKEND_URL ?? '';
+      // If empty or browser environment, use relative path (works with Nginx proxy)
+      if (!envUrl || (typeof window !== 'undefined' && window.location)) {
+        return '';
+      }
+      return envUrl;
+    })(),
     timeout: 30000, // 30 seconds
     retryAttempts: 3,
   },
@@ -51,6 +59,12 @@ export const config = {
 export const getApiUrl = (endpoint: string): string => {
   const baseUrl = (config.api.baseUrl || '').replace(/\/$/, ''); // Remove trailing slash
   const cleanEndpoint = endpoint.replace(/^\//, ''); // Remove leading slash
+  
+  // If baseUrl is empty, use relative path (works with Nginx proxy)
+  if (!baseUrl) {
+    return `/${cleanEndpoint}`;
+  }
+  
   return `${baseUrl}/${cleanEndpoint}`;
 };
 

@@ -8,11 +8,11 @@ module.exports = {
       exec_mode: 'cluster',
       env: {
         NODE_ENV: 'development',
-        PORT: 3101
+        PORT: 3109
       },
       env_production: {
         NODE_ENV: 'production',
-        PORT: process.env.PORT || 3101,
+        PORT: process.env.PORT || 3109,
         DB_HOST: process.env.DB_HOST,
         DB_USER: process.env.DB_USER,
         DB_PASSWORD: process.env.DB_PASSWORD,
@@ -36,11 +36,11 @@ module.exports = {
       cwd: './frontend',
       env: {
         NODE_ENV: 'development',
-        PORT: 3011
+        PORT: 3019
       },
       env_production: {
         NODE_ENV: 'production',
-        PORT: process.env.FRONTEND_PORT || 3011,
+        PORT: process.env.FRONTEND_PORT || 3019,
         NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
         NEXT_PUBLIC_APP_ENV: process.env.NEXT_PUBLIC_APP_ENV || 'production',
         NEXT_PUBLIC_APP_VERSION: process.env.NEXT_PUBLIC_APP_VERSION || '1.0.0'

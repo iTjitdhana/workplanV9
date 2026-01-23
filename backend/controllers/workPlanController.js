@@ -541,6 +541,301 @@ class WorkPlanController {
       });
     }
   }
+
+  static async getPrintData(req, res) {
+    try {
+      const { id } = req.params;
+
+      if (!id) {
+        return res.status(400).json({
+          success: false,
+          message: 'กรุณาระบุรหัสงาน (id)'
+        });
+      }
+
+      const data = await WorkPlan.getPrintDetails(id);
+
+      if (!data) {
+        return res.status(404).json({
+          success: false,
+          message: 'ไม่พบข้อมูลงานที่ต้องการพิมพ์'
+        });
+      }
+
+      res.json({
+        success: true,
+        data
+      });
+    } catch (error) {
+      console.error('❌ Error fetching print data:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message
+      });
+    }
+  }
+
+  static async getPrintDataByDate(req, res) {
+    try {
+      const { date } = req.query;
+
+      if (!date) {
+        return res.status(400).json({
+          success: false,
+          message: 'กรุณาระบุวันที่ผลิต (date)'
+        });
+      }
+
+      const data = await WorkPlan.getPrintDetailsByDate(date);
+
+      res.json({
+        success: true,
+        data
+      });
+    } catch (error) {
+      console.error('❌ Error fetching print data by date:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message
+      });
+    }
+  }
+
+  static async getPrintDataByJobCode(req, res) {
+    try {
+      let { jobCode, jobName } = req.query;
+
+      if (!jobCode && !jobName) {
+        return res.status(400).json({
+          success: false,
+          message: 'กรุณาระบุรหัสงานหรือชื่องาน'
+        });
+      }
+
+      if (!jobCode && jobName) {
+        const foundCode = await WorkPlan.findJobCodeByName(jobName);
+        jobCode = foundCode;
+      }
+
+      if (!jobCode) {
+        return res.status(404).json({
+          success: false,
+          message: 'ไม่พบรหัสงานที่ต้องการ'
+        });
+      }
+
+      const data = await WorkPlan.getPrintDetailsByJobCode(jobCode, { jobName });
+
+      res.json({
+        success: true,
+        data
+      });
+    } catch (error) {
+      console.error('❌ Error fetching print data by job code:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message
+      });
+    }
+  }
+
+  // ดึงข้อมูลงานที่ทำบ่อยเพื่อใช้เป็น Template
+  static async getFrequentJobs(req, res) {
+    try {
+      const minFrequency = parseInt(req.query.minFrequency) || 3;
+      const limit = parseInt(req.query.limit) || 50;
+      
+      console.log('🔍 getFrequentJobs called with:', { minFrequency, limit });
+      
+      // Query 1: ดึงงานที่ทำบ่อย (มากกว่า minFrequency ครั้ง) พร้อมข้อมูลสรุป
+      const frequentJobsQuery = `
+        SELECT 
+          wp.job_code,
+          wp.job_name,
+          COUNT(*) as frequency,
+          MIN(wp.production_date) as first_date,
+          MAX(wp.production_date) as last_date,
+          -- เวลาที่ใช้บ่อยที่สุด
+          (
+            SELECT CONCAT(start_time, '-', end_time)
+            FROM work_plans wp2
+            WHERE wp2.job_code = wp.job_code 
+              AND wp2.start_time IS NOT NULL 
+              AND wp2.end_time IS NOT NULL
+            GROUP BY CONCAT(start_time, '-', end_time)
+            ORDER BY COUNT(*) DESC
+            LIMIT 1
+          ) as most_common_time,
+          -- ห้องผลิตที่ใช้บ่อยที่สุด
+          (
+            SELECT pr.room_code
+            FROM work_plans wp2
+            JOIN production_rooms pr ON wp2.production_room_id = pr.id
+            WHERE wp2.job_code = wp.job_code 
+              AND wp2.production_room_id IS NOT NULL
+            GROUP BY pr.room_code
+            ORDER BY COUNT(*) DESC
+            LIMIT 1
+          ) as most_common_room,
+          -- เครื่องจักรที่ใช้บ่อยที่สุด
+          (
+            SELECT m.machine_code
+            FROM work_plans wp2
+            JOIN machines m ON wp2.machine_id = m.id
+            WHERE wp2.job_code = wp.job_code 
+              AND wp2.machine_id IS NOT NULL
+            GROUP BY m.machine_code
+            ORDER BY COUNT(*) DESC
+            LIMIT 1
+          ) as most_common_machine
+        FROM work_plans wp
+        WHERE wp.job_code IS NOT NULL 
+          AND wp.job_code != ''
+          AND wp.job_code != 'NEW'
+          AND wp.job_code NOT IN ('A','B','C','D')
+          AND (wp.job_type IS NULL OR wp.job_type != 'default')
+          AND wp.job_name IS NOT NULL
+          AND wp.job_name != ''
+        GROUP BY wp.job_code, wp.job_name
+        HAVING COUNT(*) >= ?
+        ORDER BY frequency DESC
+        LIMIT ${parseInt(limit) || 50}
+      `;
+
+      console.log('🔍 Executing query with params:', { minFrequency, limit: parseInt(limit) || 50 });
+      const [frequentJobs] = await pool.execute(frequentJobsQuery, [minFrequency]);
+      
+      // Query 2: ดึงข้อมูลรายละเอียดสำหรับแต่ละงาน (งานล่าสุด 3 งาน)
+      const jobsWithDetails = await Promise.all(
+        frequentJobs.map(async (job) => {
+          const detailQuery = `
+            SELECT 
+              wp.id,
+              wp.production_date,
+              wp.start_time,
+              wp.end_time,
+              wp.notes,
+              pr.room_code,
+              pr.room_name,
+              m.machine_code,
+              m.machine_name,
+              GROUP_CONCAT(DISTINCT u.name ORDER BY u.name SEPARATOR ', ') as operators
+            FROM work_plans wp
+            LEFT JOIN production_rooms pr ON wp.production_room_id = pr.id
+            LEFT JOIN machines m ON wp.machine_id = m.id
+            LEFT JOIN work_plan_operators wpo ON wp.id = wpo.work_plan_id
+            LEFT JOIN users u ON wpo.user_id = u.id OR wpo.id_code = u.id_code
+            WHERE wp.job_code = ?
+            GROUP BY wp.id, wp.production_date, wp.start_time, wp.end_time, wp.notes, pr.room_code, pr.room_name, m.machine_code, m.machine_name
+            ORDER BY wp.production_date DESC, wp.id DESC
+            LIMIT 3
+          `;
+          
+          const [details] = await pool.execute(detailQuery, [job.job_code]);
+          
+          return {
+            ...job,
+            recentWorkPlans: details.map(detail => ({
+              id: detail.id,
+              production_date: detail.production_date,
+              start_time: detail.start_time,
+              end_time: detail.end_time,
+              notes: detail.notes,
+              room: detail.room_name ? {
+                code: detail.room_code,
+                name: detail.room_name
+              } : null,
+              machine: detail.machine_name ? {
+                code: detail.machine_code,
+                name: detail.machine_name
+              } : null,
+              operators: detail.operators ? detail.operators.split(', ') : []
+            }))
+          };
+        })
+      );
+
+      // Query 3: สรุปสถิติ
+      const statsQuery = `
+        SELECT 
+          COUNT(DISTINCT job_code) as total_unique_jobs,
+          SUM(cnt) as total_work_plans,
+          SUM(CASE WHEN cnt >= 10 THEN 1 ELSE 0 END) as jobs_10plus,
+          SUM(CASE WHEN cnt >= 5 AND cnt < 10 THEN 1 ELSE 0 END) as jobs_5to9,
+          SUM(CASE WHEN cnt >= 3 AND cnt < 5 THEN 1 ELSE 0 END) as jobs_3to4
+        FROM (
+          SELECT job_code, COUNT(*) as cnt
+          FROM work_plans
+          WHERE job_code IS NOT NULL 
+            AND job_code != '' 
+            AND job_code != 'NEW'
+            AND job_code NOT IN ('A','B','C','D')
+            AND (job_type IS NULL OR job_type != 'default')
+          GROUP BY job_code
+        ) as job_counts
+      `;
+      
+      const [stats] = await pool.execute(statsQuery);
+      
+      res.json({
+        success: true,
+        data: {
+          jobs: jobsWithDetails,
+          statistics: {
+            total_unique_jobs: stats[0].total_unique_jobs,
+            total_work_plans: stats[0].total_work_plans,
+            jobs_10plus: stats[0].jobs_10plus,
+            jobs_5to9: stats[0].jobs_5to9,
+            jobs_3to4: stats[0].jobs_3to4
+          }
+        },
+        message: `พบงานที่ทำบ่อย ${jobsWithDetails.length} งาน`
+      });
+    } catch (error) {
+      console.error('Error getting frequent jobs:', error);
+      console.error('Error stack:', error.stack);
+      res.status(500).json({
+        success: false,
+        message: 'เกิดข้อผิดพลาดในการดึงข้อมูลงานที่ทำบ่อย: ' + error.message
+      });
+    }
+  }
+
+  // ดึงข้อมูลงานล่าสุดตาม job_code หรือ job_name เพื่อใช้ auto-fill
+  static async getLatestByJob(req, res) {
+    try {
+      const { job_code, job_name } = req.query;
+      
+      if (!job_code && !job_name) {
+        return res.status(400).json({
+          success: false,
+          message: 'กรุณาระบุ job_code หรือ job_name'
+        });
+      }
+
+      const latestWorkPlan = await WorkPlan.getLatestByJob(job_code, job_name);
+      
+      if (!latestWorkPlan) {
+        return res.json({
+          success: true,
+          data: null,
+          message: 'ไม่พบข้อมูลงานล่าสุด'
+        });
+      }
+
+      res.json({
+        success: true,
+        data: latestWorkPlan,
+        message: 'ดึงข้อมูลงานล่าสุดสำเร็จ'
+      });
+    } catch (error) {
+      console.error('Error getting latest work plan by job:', error);
+      res.status(500).json({
+        success: false,
+        message: 'เกิดข้อผิดพลาดในการดึงข้อมูลงานล่าสุด: ' + error.message
+      });
+    }
+  }
 }
 
 // เพิ่ม controller สำหรับ draft

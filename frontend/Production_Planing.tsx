@@ -1,4 +1,4 @@
-﻿"use client"
+"use client"
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import { useRouter } from "next/navigation"
@@ -26,6 +26,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import AutosizeTextarea from "@/components/AutosizeTextarea"
 import dynamic from "next/dynamic"
 const RichNoteEditor = dynamic(() => import("@/components/RichNoteEditor"), { ssr: false })
@@ -41,6 +42,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { TableSkeletonLoader, CardSkeletonLoader } from "@/components/SkeletonLoader";
 import { WeeklyCalendar } from "@/components/WeeklyCalendar";
 import { TimeTablePopup } from "@/components/TimeTablePopup";
+import { TIMETABLE_CONSTANTS } from "@/components/timetable/constants";
 import { ProductionTask } from "@/lib/types/weekly-calendar";
 import { arrayMove } from "@dnd-kit/sortable";
 import { createSafeDate, formatDateForDisplay, formatDateForAPI, formatDateThaiShort } from "@/lib/dateUtils";
@@ -114,10 +116,25 @@ export default function MedicalAppointmentDashboard() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const loadingRef = useRef(false); // flag เพื่อป้องกัน race condition
   const hasInitializedDateRef = useRef(false); // flag เพื่อป้องกันการ set selectedDate ซ้ำ
-  const [showWorkerDetails, setShowWorkerDetails] = useState(false); // เพิ่ม state สำหรับเปิด/ปิดรายละเอียด
+  const [showWorkerDetails, setShowWorkerDetails] = useState(true); // เพิ่ม state สำหรับเปิด/ปิดรายละเอียด (default เปิด)
   const [showTimeTable, setShowTimeTable] = useState(false); // เพิ่ม state สำหรับเปิด/ปิด Time Table Popup (default ปิด)
   const [syncModeEnabled, setSyncModeEnabled] = useState(false); // เพิ่ม state สำหรับ sync mode
   const router = useRouter();
+  
+  // State สำหรับ popup ถามว่าจะใช้ข้อมูลตามแผนหรือไม่
+  const [showAutoFillDialog, setShowAutoFillDialog] = useState(false);
+  const [pendingJobData, setPendingJobData] = useState<{ jobCode: string; jobName: string } | null>(null);
+  const [pendingLatestData, setPendingLatestData] = useState<any>(null); // เก็บข้อมูลล่าสุดเพื่อแสดงใน Dialog
+  const [autoFillOption, setAutoFillOption] = useState<'latest' | 'best' | 'manual' | null>(null); // ตัวเลือกวิธีการกรอกข้อมูล (null = ยังไม่เลือก)
+  const [expandedOption, setExpandedOption] = useState<'latest' | 'best' | 'manual' | null>(null); // ตัวเลือกที่กำลังขยายแสดงข้อมูล
+  const [autoFilledFields, setAutoFilledFields] = useState<Set<string>>(new Set()); // เก็บช่องที่ auto-fill แล้ว
+  const [shouldFocusFields, setShouldFocusFields] = useState(false); // flag สำหรับ focus
+  
+  // Refs สำหรับ focus ที่ช่องต่างๆ
+  const operatorsRefs = [useRef<HTMLButtonElement>(null), useRef<HTMLButtonElement>(null), useRef<HTMLButtonElement>(null), useRef<HTMLButtonElement>(null)];
+  const startTimeRef = useRef<HTMLButtonElement>(null);
+  const endTimeRef = useRef<HTMLButtonElement>(null);
+  const roomRef = useRef<HTMLButtonElement>(null);
   
   // เพิ่ม cache สำหรับผลลัพธ์การค้นหา
   const searchCacheRef = useRef<Map<string, SearchOption[]>>(new Map());
@@ -414,6 +431,53 @@ export default function MedicalAppointmentDashboard() {
     debugLog('⏰ Time options state updated:', timeOptions);
   }, [users, timeOptions]);
 
+  // useEffect สำหรับ focus ที่ช่องที่ auto-fill แล้ว
+  useEffect(() => {
+    if (shouldFocusFields && autoFilledFields.size > 0) {
+      // Focus ที่ช่องแรกที่ auto-fill
+      const focusOrder = ['operators', 'startTime', 'endTime', 'room'];
+      
+      for (const field of focusOrder) {
+        if (autoFilledFields.has(field)) {
+          setTimeout(() => {
+            if (field === 'operators') {
+              // Focus ที่ผู้ปฏิบัติงานคนแรกที่มีค่า
+              const firstOperatorIndex = operators.findIndex(op => op && op !== '');
+              if (firstOperatorIndex >= 0 && operatorsRefs[firstOperatorIndex]?.current) {
+                operatorsRefs[firstOperatorIndex].current?.focus();
+              }
+            } else if (field === 'startTime' && startTimeRef.current) {
+              startTimeRef.current.focus();
+            } else if (field === 'endTime' && endTimeRef.current) {
+              endTimeRef.current.focus();
+            } else if (field === 'room' && roomRef.current) {
+              roomRef.current.focus();
+            }
+          }, 100);
+          break; // ออกจาก for loop เมื่อเจอ field แรกที่ auto-fill
+        }
+      }
+    }
+  }, [shouldFocusFields, autoFilledFields, operators]);
+
+  // useEffect สำหรับลบ focus เมื่อผู้ใช้คลิกที่อื่น
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      // ถ้าคลิกนอกฟอร์มหรือคลิกที่ element อื่น ให้ลบ focus
+      if (!target.closest('[role="combobox"]') && !target.closest('[role="listbox"]')) {
+        setShouldFocusFields(false);
+      }
+    };
+
+    if (shouldFocusFields) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside);
+      };
+    }
+  }, [shouldFocusFields]);
+
   // Autocomplete job name/code - ใช้ local search แทน API เพื่อความเร็ว (ปิดใช้งานแล้ว)
   /*
   useEffect(() => {
@@ -640,22 +704,22 @@ export default function MedicalAppointmentDashboard() {
     let defaultDrafts = dayData.filter(item => defaultCodes.includes(item.job_code));
     defaultDrafts.sort((a, b) => defaultCodes.indexOf(a.job_code) - defaultCodes.indexOf(b.job_code));
 
-    // งานปกติ (is_special !== 1 และ workflow_status_id !== 10, ไม่ใช่ default, isDraft = false)
+    // งานปกติ (is_special !== 1 และ workflow_status_id !== 10, ไม่ใช่ default)
+    // ✅ แสดงทั้ง draft และ non-draft (ไม่กรอง draft ออก)
     const normalJobs = dayData.filter(item => 
       !defaultCodes.includes(item.job_code) && 
-      !isSpecialItem(item) && 
-      !isDraftItem(item)
+      !isSpecialItem(item)
     );
     
-    // งานพิเศษ (is_special === 1 หรือ workflow_status_id === 10, isDraft = false)
+    // งานพิเศษ (is_special === 1 หรือ workflow_status_id === 10, ไม่ใช่ default)
+    // ✅ แสดงทั้ง draft และ non-draft (ไม่กรอง draft ออก)
     const specialJobs = dayData.filter(item => 
       !defaultCodes.includes(item.job_code) && 
-      isSpecialItem(item) && 
-      !isDraftItem(item)
+      isSpecialItem(item)
     );
     
-    // งาน draft (isDraft = true, ไม่ใช่ default)
-    const draftJobs = dayData.filter(item => !defaultCodes.includes(item.job_code) && isDraftItem(item));
+    // งาน draft (ไม่ใช้แล้ว - รวมอยู่ใน normalJobs และ specialJobs แล้ว)
+    const draftJobs: any[] = [];
 
     // ฟังก์ชันเรียงตาม id อย่างเดียว (เก่าสุดก่อน)
     const sortFn = (a: any, b: any) => {
@@ -768,6 +832,69 @@ export default function MedicalAppointmentDashboard() {
     return sortedJobs.length + 1;
   }
 
+  // ฟังก์ชันค้นหางานจากฐานข้อมูลโดยใช้ job_name
+  const findJobCodeByName = async (jobName: string): Promise<string | null> => {
+    if (!jobName || !jobName.trim()) return null;
+    
+    try {
+      debugLog('🔍 Searching for job_code by job_name:', jobName.trim());
+      
+      // ค้นหาจาก process_steps (มีสูตร)
+      const processStepsResponse = await fetch(getApiUrl(`/api/process-steps/search?query=${encodeURIComponent(jobName.trim())}`));
+      const processStepsData = await processStepsResponse.json();
+      
+      if (processStepsData.success && processStepsData.data && processStepsData.data.length > 0) {
+        // หางานที่ตรงกับ job_name มากที่สุด (exact match หรือ closest match)
+        const exactMatch = processStepsData.data.find((item: any) => 
+          item.job_name && item.job_name.trim().toLowerCase() === jobName.trim().toLowerCase()
+        );
+        
+        if (exactMatch && exactMatch.job_code) {
+          debugLog('✅ Found exact match in process_steps:', exactMatch.job_code);
+          return exactMatch.job_code.trim();
+        }
+        
+        // ถ้าไม่มี exact match ให้ใช้ตัวแรกที่เจอ
+        const firstMatch = processStepsData.data[0];
+        if (firstMatch && firstMatch.job_code) {
+          debugLog('✅ Found closest match in process_steps:', firstMatch.job_code);
+          return firstMatch.job_code.trim();
+        }
+      }
+      
+      // ค้นหาจาก work_plans (งานที่เคยบันทึก)
+      const workPlansResponse = await fetch(getApiUrl(`/api/work-plans/search?name=${encodeURIComponent(jobName.trim())}`));
+      const workPlansData = await workPlansResponse.json();
+      
+      if (workPlansData.success && workPlansData.data && workPlansData.data.length > 0) {
+        // หางานที่ตรงกับ job_name มากที่สุด
+        const exactMatch = workPlansData.data.find((item: any) => 
+          item.job_name && item.job_name.trim().toLowerCase() === jobName.trim().toLowerCase()
+        );
+        
+        if (exactMatch && exactMatch.job_code && exactMatch.job_code !== 'NEW') {
+          debugLog('✅ Found exact match in work_plans:', exactMatch.job_code);
+          return exactMatch.job_code.trim();
+        }
+        
+        // ถ้าไม่มี exact match ให้ใช้ตัวแรกที่เจอ (แต่ไม่ใช่ 'NEW')
+        const firstMatch = workPlansData.data.find((item: any) => 
+          item.job_code && item.job_code !== 'NEW'
+        );
+        if (firstMatch && firstMatch.job_code) {
+          debugLog('✅ Found closest match in work_plans:', firstMatch.job_code);
+          return firstMatch.job_code.trim();
+        }
+      }
+      
+      debugLog('❌ No job_code found for:', jobName.trim());
+      return null;
+    } catch (error) {
+      debugError('Error searching for job_code:', error);
+      return null;
+    }
+  };
+
   // ฟังก์ชันสร้างเลขงานอัตโนมัติ
   const generateJobCode = () => {
     // หาเลขงานที่ยังไม่ซ้ำในวันนั้น
@@ -817,6 +944,106 @@ export default function MedicalAppointmentDashboard() {
     return end > start;
   };
 
+  // Helper function สำหรับ normalize เวลาให้เป็น HH:mm
+  const normalizeTimeForForm = (t: string) => {
+    if (!t) return "";
+    const [h, m] = t.split(":");
+    return `${h.padStart(2, "0")}:${m.padStart(2, "0")}`;
+  };
+
+  // ฟังก์ชันดึงข้อมูลงานล่าสุด (return ข้อมูล)
+  const fetchLatestWorkPlanData = async (jobCode: string, jobName: string) => {
+    if (!jobCode && !jobName) return null;
+    
+    try {
+      debugLog('🔍 Fetching latest work plan data for:', { jobCode, jobName });
+      
+      const params = new URLSearchParams();
+      if (jobCode && jobCode !== 'NEW') params.set('job_code', jobCode);
+      if (jobName) params.set('job_name', jobName);
+      
+      const response = await fetch(`/api/work-plans/latest-by-job?${params.toString()}`);
+      const data = await response.json();
+      
+      if (data.success && data.data) {
+        return data.data;
+      } else {
+        debugLog('⚠️ No latest work plan data found');
+        return null;
+      }
+    } catch (error) {
+      debugError('Error fetching latest work plan data:', error);
+      return null;
+    }
+  };
+
+  // ฟังก์ชัน auto-fill ข้อมูลพร้อม focus
+  const applyAutoFillData = (latestData: any, jobName: string) => {
+    const filledFields = new Set<string>();
+    
+    debugLog('✅ Applying auto-fill data:', latestData);
+    
+    // Auto-fill ผู้ปฏิบัติงาน (สูงสุด 4 คน)
+    if (latestData.operators && Array.isArray(latestData.operators) && latestData.operators.length > 0) {
+      const operatorsArray = latestData.operators.slice(0, 4);
+      // เติมให้ครบ 4 ตำแหน่ง
+      while (operatorsArray.length < 4) {
+        operatorsArray.push("");
+      }
+      setOperators(operatorsArray);
+      filledFields.add('operators');
+      debugLog('✅ Auto-filled operators:', operatorsArray);
+    }
+    
+    // Auto-fill เวลาเริ่ม
+    if (latestData.start_time) {
+      const normalizedStartTime = normalizeTimeForForm(latestData.start_time);
+      setStartTime(normalizedStartTime);
+      filledFields.add('startTime');
+      debugLog('✅ Auto-filled start_time:', normalizedStartTime);
+    }
+    
+    // Auto-fill เวลาสิ้นสุด
+    if (latestData.end_time) {
+      const normalizedEndTime = normalizeTimeForForm(latestData.end_time);
+      setEndTime(normalizedEndTime);
+      filledFields.add('endTime');
+      debugLog('✅ Auto-filled end_time:', normalizedEndTime);
+    }
+    
+    // Auto-fill ห้องผลิต
+    if (latestData.room_code) {
+      setSelectedRoom(latestData.room_code);
+      filledFields.add('room');
+      debugLog('✅ Auto-filled room:', latestData.room_code);
+    } else if (latestData.production_room_id) {
+      // ถ้าไม่มี room_code ให้หา room_code จาก production_room_id
+      const room = rooms.find(r => r.id === latestData.production_room_id || r.id?.toString() === latestData.production_room_id?.toString());
+      if (room) {
+        setSelectedRoom(room.room_code);
+        filledFields.add('room');
+        debugLog('✅ Auto-filled room from ID:', room.room_code);
+      }
+    }
+    
+    // Auto-fill เครื่องบันทึกข้อมูลการผลิต (optional)
+    if (latestData.machine_code) {
+      setSelectedMachine(latestData.machine_code);
+      debugLog('✅ Auto-filled machine:', latestData.machine_code);
+    } else if (latestData.machine_id) {
+      // ถ้าไม่มี machine_code ให้หา machine_code จาก machine_id
+      const machine = machines.find(m => m.id === latestData.machine_id || m.id?.toString() === latestData.machine_id?.toString());
+      if (machine) {
+        setSelectedMachine(machine.machine_code);
+        debugLog('✅ Auto-filled machine from ID:', machine.machine_code);
+      }
+    }
+    
+    setAutoFilledFields(filledFields);
+    setShouldFocusFields(true);
+    setMessage(`✅ โหลดข้อมูลล่าสุดของงาน "${jobName}" แล้ว`);
+  };
+
   const handleSubmit = async () => {
     if (isSubmitting) return; // ป้องกัน submit ซ้ำ
     setIsSubmitting(true);
@@ -861,8 +1088,24 @@ export default function MedicalAppointmentDashboard() {
       const finalStartTime = startTime.trim() || "00:00";
       const finalEndTime = endTime.trim() || "00:00";
       
-      // สร้างเลขงานอัตโนมัติถ้าไม่มี job_code
-      const finalJobCode = jobCode || generateJobCode();
+      // ค้นหางานจากฐานข้อมูลก่อน (ถ้ายังไม่มี job_code หรือ job_code เป็น empty string)
+      let finalJobCode = jobCode;
+      if (!finalJobCode || finalJobCode.trim() === '' || finalJobCode === 'NEW') {
+        debugLog('🔍 Job code is empty or NEW, searching in database...');
+        const foundJobCode = await findJobCodeByName(jobName || jobQuery);
+        if (foundJobCode) {
+          finalJobCode = foundJobCode;
+          debugLog('✅ Found job_code from database:', finalJobCode);
+          // อัพเดท state เพื่อให้ UI แสดง job_code ที่ถูกต้อง
+          setJobCode(finalJobCode);
+        } else {
+          // ถ้าไม่เจอ ให้สร้างเลขงานอัตโนมัติ
+          finalJobCode = generateJobCode();
+          debugLog('⚠️ Job not found in database, generating new job_code:', finalJobCode);
+        }
+      } else {
+        debugLog('✅ Using existing job_code:', finalJobCode);
+      }
       
       // คำนวณลำดับงาน
       const workOrder = calculateWorkOrder(selectedDate, finalStartTime, operators.filter(Boolean).join(", "));
@@ -997,8 +1240,24 @@ export default function MedicalAppointmentDashboard() {
       const finalStartTime = startTime?.trim() || "";
       const finalEndTime = endTime?.trim() || "";
       
-      // สร้างเลขงานอัตโนมัติถ้าไม่มี job_code
-      const finalJobCode = jobCode || generateJobCode();
+      // ค้นหางานจากฐานข้อมูลก่อน (ถ้ายังไม่มี job_code หรือ job_code เป็น empty string)
+      let finalJobCode = jobCode;
+      if (!finalJobCode || finalJobCode.trim() === '' || finalJobCode === 'NEW') {
+        debugLog('🔍 [Draft] Job code is empty or NEW, searching in database...');
+        const foundJobCode = await findJobCodeByName(finalJobName);
+        if (foundJobCode) {
+          finalJobCode = foundJobCode;
+          debugLog('✅ [Draft] Found job_code from database:', finalJobCode);
+          // อัพเดท state เพื่อให้ UI แสดง job_code ที่ถูกต้อง
+          setJobCode(finalJobCode);
+        } else {
+          // ถ้าไม่เจอ ให้สร้างเลขงานอัตโนมัติ
+          finalJobCode = generateJobCode();
+          debugLog('⚠️ [Draft] Job not found in database, generating new job_code:', finalJobCode);
+        }
+      } else {
+        debugLog('✅ [Draft] Using existing job_code:', finalJobCode);
+      }
       
       const requestBody = {
         production_date: formattedDate,
@@ -1494,6 +1753,9 @@ export default function MedicalAppointmentDashboard() {
         
         // รีโหลดข้อมูล
         await loadAllProductionData();
+
+        const encodedDate = encodeURIComponent(selectedDate);
+        window.open(`/planner/print/date/${encodedDate}`, "_blank", "noopener,noreferrer");
         
         // เปิด Google Sheet
         window.open("https://docs.google.com/spreadsheets/d/1lzsYNoIbTd1Uy5r37xUtK5PuOHyNlYYiqS7xZvrU8C8", "_blank");
@@ -1508,7 +1770,6 @@ export default function MedicalAppointmentDashboard() {
     setIsSubmitting(false);
   };
 
-  // เพิ่มฟังก์ชัน Sync Drafts (เก็บไว้สำหรับ backward compatibility)
   const handleSyncDrafts = async () => {
     // เรียกใช้ handlePrintWorkPlan แทน
     await handlePrintWorkPlan();
@@ -2095,6 +2356,23 @@ export default function MedicalAppointmentDashboard() {
     setJobCode("");
   };
 
+  // ฟังก์ชันเคลียร์เฉพาะฟิลด์ที่เลือก (ไม่เคลียร์ job)
+  const clearFormFields = () => {
+    setOperators(["", "", "", ""]);
+    setStartTime("");
+    setEndTime("");
+    setNote("");
+    setSelectedRoom("");
+    // ล้างช่องค้นหางาน
+    setJobQuery("");
+    setJobCode("");
+    setJobName("");
+    // เคลียร์ focus และ auto-filled fields
+    setShouldFocusFields(false);
+    setAutoFilledFields(new Set());
+    setMessage("ล้างข้อมูลทั้งหมดแล้ว");
+  };
+
   // ฟังก์ชันโหลดข้อมูลย้อนหลัง 30 วัน (background)
   const loadHistoricalData = async (currentDate: string) => {
     try {
@@ -2431,44 +2709,94 @@ export default function MedicalAppointmentDashboard() {
     let totalUsedTime = 0;
     let totalWorkHours = 0;
 
-    // สร้าง Map สำหรับเก็บเวลาของแต่ละคน
-    const workerHours = new Map<string, number>();
+    // สร้าง Map สำหรับเก็บช่วงเวลาทำงานของแต่ละคน (เพื่อคำนวณเวลาจริงโดยไม่นับซ้ำ)
+    const workerTimeIntervals = new Map<string, Array<{ start: Date; end: Date }>>();
 
+    // รวบรวมช่วงเวลาทำงานของแต่ละคน
     validJobs.forEach(job => {
-      // เพิ่มผู้ปฏิบัติงานในงานนี้เข้าไปใน Set (ไม่ซ้ำ)
       const workers = getOperatorsArray(job.operators);
-      workers.forEach((worker: string) => allWorkers.add(worker));
+      workers.forEach((worker: string) => {
+        allWorkers.add(worker);
+        
+        const startTime = new Date(`2000-01-01 ${job.start_time}`);
+        const endTime = new Date(`2000-01-01 ${job.end_time}`);
+        
+        if (!workerTimeIntervals.has(worker)) {
+          workerTimeIntervals.set(worker, []);
+        }
+        workerTimeIntervals.get(worker)!.push({ start: startTime, end: endTime });
+      });
+    });
 
-      // คำนวณเวลาที่ใช้ในงานนี้ (หักเวลาพักเที่ยง)
-      const startTime = new Date(`2000-01-01 ${job.start_time}`);
-      const endTime = new Date(`2000-01-01 ${job.end_time}`);
-      let durationHours = (endTime.getTime() - startTime.getTime()) / (1000 * 60 * 60);
+    // ฟังก์ชันรวมช่วงเวลาที่ทับซ้อนกัน (merge overlapping intervals)
+    const mergeIntervals = (intervals: Array<{ start: Date; end: Date }>): Array<{ start: Date; end: Date }> => {
+      if (intervals.length === 0) return [];
       
-      // ตรวจสอบว่าข้ามเที่ยงหรือไม่ (12:00-13:00)
-      const lunchStart = new Date(`2000-01-01 12:00`);
-      const lunchEnd = new Date(`2000-01-01 13:00`);
+      // เรียงตามเวลาเริ่มต้น
+      const sorted = [...intervals].sort((a, b) => a.start.getTime() - b.start.getTime());
+      const merged: Array<{ start: Date; end: Date }> = [sorted[0]];
       
-      // ถ้างานข้ามเที่ยง ให้หัก 45 นาที (0.75 ชั่วโมง)
-      if (startTime < lunchEnd && endTime > lunchStart) {
-        durationHours -= 0.75; // หัก 45 นาที
+      for (let i = 1; i < sorted.length; i++) {
+        const current = sorted[i];
+        const last = merged[merged.length - 1];
+        
+        // ถ้าช่วงเวลาทับซ้อนหรือต่อกัน ให้รวมเข้าด้วยกัน
+        if (current.start.getTime() <= last.end.getTime()) {
+          last.end = new Date(Math.max(last.end.getTime(), current.end.getTime()));
+        } else {
+          merged.push(current);
+        }
       }
       
-      // คำนวณคน-ชั่วโมง (จำนวนคน × เวลาที่ใช้)
-      const workerCount = workers.length;
-      totalUsedTime += durationHours * workerCount;
+      return merged;
+    };
 
-      // เพิ่มเวลาสำหรับแต่ละคน
-      workers.forEach((worker: string) => {
-        const currentHours = workerHours.get(worker) || 0;
-        workerHours.set(worker, currentHours + durationHours);
+    // ฟังก์ชันคำนวณเวลาจริงจากช่วงเวลา (หักเวลาพักเที่ยง)
+    const calculateActualHours = (intervals: Array<{ start: Date; end: Date }>): number => {
+      const lunchStart = new Date(`2000-01-01 ${TIMETABLE_CONSTANTS.LUNCH_BREAK.START}`);
+      const lunchEnd = new Date(`2000-01-01 ${TIMETABLE_CONSTANTS.LUNCH_BREAK.END}`);
+      
+      let totalHours = 0;
+      
+      intervals.forEach(interval => {
+        let durationHours = (interval.end.getTime() - interval.start.getTime()) / (1000 * 60 * 60);
+        
+        // หักเวลาพักเที่ยงถ้ามีส่วนทับ
+        if (interval.start < lunchEnd && interval.end > lunchStart) {
+          const overlapStart = interval.start > lunchStart ? interval.start : lunchStart;
+          const overlapEnd = interval.end < lunchEnd ? interval.end : lunchEnd;
+          const overlapHours = (overlapEnd.getTime() - overlapStart.getTime()) / (1000 * 60 * 60);
+          durationHours -= overlapHours;
+        }
+        
+        totalHours += durationHours;
       });
+      
+      return totalHours;
+    };
+
+    // คำนวณเวลาจริงของแต่ละคน (รวมช่วงเวลาที่ทับซ้อน)
+    const workerHours = new Map<string, number>();
+    workerTimeIntervals.forEach((intervals, worker) => {
+      const merged = mergeIntervals(intervals);
+      const actualHours = calculateActualHours(merged);
+      workerHours.set(worker, actualHours);
+      totalUsedTime += actualHours; // สำหรับ totalUsedTime ใช้เวลาจริงของแต่ละคน
     });
 
     // จำนวนผู้ปฏิบัติงานที่ไม่ซ้ำในวันนั้น
     const totalWorkers = allWorkers.size;
 
-    // คำนวณชั่วโมงงาน (จำนวนผู้ปฏิบัติงาน × 8 ชั่วโมง)
-    totalWorkHours = totalWorkers * 8;
+    // คำนวณเวลาพักเที่ยงจาก TIMETABLE_CONSTANTS (12:30-13:15 = 45 นาที)
+    const lunchStartTime = new Date(`2000-01-01 ${TIMETABLE_CONSTANTS.LUNCH_BREAK.START}`);
+    const lunchEndTime = new Date(`2000-01-01 ${TIMETABLE_CONSTANTS.LUNCH_BREAK.END}`);
+    const lunchBreakMinutes = (lunchEndTime.getTime() - lunchStartTime.getTime()) / (1000 * 60);
+    const lunchBreakHours = lunchBreakMinutes / 60; // 45 นาที = 0.75 ชั่วโมง
+
+    // คำนวณชั่วโมงงาน (จำนวนผู้ปฏิบัติงาน × เวลาทำงานจริงต่อวัน)
+    // เวลาทำงานจริง = 8 ชั่วโมง - เวลาพักเที่ยง
+    const workHoursPerDay = 8 - lunchBreakHours; // 7.25 ชั่วโมง (ถ้าพัก 45 นาที)
+    totalWorkHours = totalWorkers * workHoursPerDay;
 
     // คำนวณ Capacity (%)
     const capacityPercentage = totalWorkHours > 0 ? (totalUsedTime / totalWorkHours) * 100 : 0;
@@ -2476,18 +2804,26 @@ export default function MedicalAppointmentDashboard() {
     // สร้างรายการข้อมูลของแต่ละคน
     const workerDetails = Array.from(allWorkers).map(worker => {
       const hours = workerHours.get(worker) || 0;
-      const quota = 8; // โคต้า 8 ชั่วโมง
-      const maxQuota = 8.5; // เกิน 8 ชั่วโมง 30 นาที ให้ถือว่าเต็มเวลา
+      const quota = workHoursPerDay; // โคต้าเวลาทำงานจริงต่อวัน (8 ชั่วโมง - เวลาพักเที่ยงจาก TIMETABLE_CONSTANTS)
+      const maxQuota = 7.5; // เกิน 7.5 ชั่วโมง ให้ถือว่าเต็มเวลา (7.25 + buffer 15 นาที)
       const remaining = Math.max(0, quota - hours);
+      
+      // ใช้ threshold เล็กน้อยเพื่อจัดการปัญหา floating point precision
+      const EPSILON = 0.001; // 0.001 ชั่วโมง = 0.06 นาที
       
       let status, displayHours, displayText;
       
       // ฟังก์ชันแปลงเวลาจากทศนิยมเป็นรูปแบบที่อ่านง่าย
       const formatRemainingTime = (hours: number) => {
-        if (hours === 0) return '0 ชั่วโมง';
+        // ปัดเศษเพื่อหลีกเลี่ยงปัญหา floating point
+        const roundedHours = Math.round(hours * 60) / 60; // ปัดเศษเป็นนาทีแล้วแปลงกลับ
         
-        const wholeHours = Math.floor(hours);
-        const minutes = Math.round((hours - wholeHours) * 60);
+        if (roundedHours <= EPSILON) return '0 ชั่วโมง';
+        
+        // ใช้ Math.floor เพื่อหลีกเลี่ยงปัญหา rounding ที่อาจทำให้ได้ 60 นาที
+        const totalMinutes = Math.round(roundedHours * 60); // แปลงเป็นนาทีทั้งหมดแล้วปัดเศษ
+        const wholeHours = Math.floor(totalMinutes / 60);
+        const minutes = totalMinutes % 60;
         
         if (wholeHours === 0) {
           return `ว่าง ${minutes} นาที`;
@@ -2498,13 +2834,14 @@ export default function MedicalAppointmentDashboard() {
         }
       };
       
-      if (hours >= maxQuota) {
-        // เกิน 8.5 ชั่วโมง ให้แสดงว่าเต็มเวลา
+      // ตรวจสอบสถานะ: ใช้ EPSILON เพื่อจัดการปัญหา floating point precision
+      if (hours >= maxQuota || remaining <= EPSILON) {
+        // เกิน 7.5 ชั่วโมง (maxQuota) หรือเหลือน้อยมาก (<= 0.001 ชั่วโมง) ให้แสดงว่าเต็มเวลา
         status = 'full';
         displayHours = quota;
         displayText = 'ได้รับงานเต็มเวลา';
-      } else if (remaining <= 2) {
-        // เหลือ 0-2 ชั่วโมง
+      } else if (remaining > EPSILON && remaining <= 2) {
+        // เหลือมากกว่า 0.001 ชั่วโมง แต่ไม่เกิน 2 ชั่วโมง
         status = 'limited';
         displayHours = hours;
         displayText = formatRemainingTime(remaining);
@@ -2533,11 +2870,11 @@ export default function MedicalAppointmentDashboard() {
       capacityPercentage,
       validJobsCount: validJobs.length,
       uniqueWorkers: Array.from(allWorkers), // เพิ่มรายชื่อผู้ปฏิบัติงานที่ไม่ซ้ำ
-      lunchBreakDeduction: 0.75, // ข้อมูลเวลาพักเที่ยงที่หัก
+      lunchBreakDeduction: lunchBreakHours, // ข้อมูลเวลาพักเที่ยงที่หัก (คำนวณจาก TIMETABLE_CONSTANTS)
       availableWorkers: users
         .filter(user => !allWorkers.has(user.name)) // คนที่ไม่ได้ทำงาน
         .filter(user => !['RD', 'พี่สัญญา'].includes(user.name)) // กรองพนักงานเสริมออก
-        .map(user => user.name), // คนที่ว่างงาน (เฉพาะผู้ปฏิบัติงานหลัก)
+        .map(user => user.name), // คนที่ยังรับงานได้ (เฉพาะผู้ปฏิบัติงานหลัก)
       availableSupportStaff: users
         .filter(user => !allWorkers.has(user.name)) // คนที่ไม่ได้ทำงาน
         .filter(user => ['RD', 'พี่สัญญา'].includes(user.name)) // เฉพาะพนักงานเสริม
@@ -3151,15 +3488,40 @@ export default function MedicalAppointmentDashboard() {
 
                   {/* Autocomplete Job Name/Code */}
                   <div className="space-y-2 relative">
-                    <Label className="text-xs sm:text-sm font-bold text-gray-700">เพิ่มงานผลิต</Label>
+                    <div className="flex items-center justify-between">
+                      <Label className="text-xs sm:text-sm font-bold text-gray-700">เพิ่มงานผลิต</Label>
+                      <button
+                        type="button"
+                        onClick={clearFormFields}
+                        disabled={isSubmitting}
+                        className="text-sm text-green-600 hover:text-green-700 underline disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        ล้างข้อมูลทั้งหมด
+                      </button>
+                    </div>
                     <div className="relative">
                       <JobSearchSelect
                         value={jobQuery}
-                        onChange={(jobCode, jobName) => {
+                        onChange={async (jobCode, jobName) => {
                           debugLog('🎯 JobSearchSelect selected:', { jobCode, jobName });
                           setJobCode(jobCode);
                           setJobName(jobName);
                           setJobQuery(jobName);
+                          
+                          // ถ้าเป็นงานใหม่ ไม่ต้องแสดง popup
+                          if (jobCode === 'NEW' || !jobCode) {
+                            return;
+                          }
+                          
+                          // ดึงข้อมูลงานล่าสุดเพื่อตรวจสอบว่ามีข้อมูลหรือไม่
+                          const latestData = await fetchLatestWorkPlanData(jobCode, jobName);
+                          
+                          // ถ้ามีข้อมูลล่าสุด ให้แสดง popup ถามผู้ใช้
+                          if (latestData) {
+                            setPendingJobData({ jobCode, jobName });
+                            setPendingLatestData(latestData);
+                            setShowAutoFillDialog(true);
+                          }
                         }}
                         onAddNew={(jobName) => {
                           debugLog('➕ Adding new job:', jobName);
@@ -3178,39 +3540,68 @@ export default function MedicalAppointmentDashboard() {
 
                   {/* Staff Positions */}
                   <div className="space-y-3 sm:space-y-4">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-xs sm:text-sm font-bold text-gray-700">ผู้ปฏิบัติงาน (1-4 คน)</Label>
-                    </div>
+                    <Label className="text-xs sm:text-sm font-bold text-gray-700">ผู้ปฏิบัติงาน (1-4 คน)</Label>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                      {[1, 2, 3, 4].map((position) => (
-                        <div key={position} className="space-y-1 sm:space-y-2">
-                          <Label className="text-xs text-gray-600">ผู้ปฏิบัติงาน {position}</Label>
-                          <Select
-                            value={operators[position - 1] || "__none__"}
-                            onValueChange={(val) => {
-                              const newOps = [...operators];
-                              newOps[position - 1] = val === "__none__" ? "" : val;
-                              setOperators(newOps);
-                            }}
-                          >
-                            <SelectTrigger className="h-8 sm:h-9 text-sm">
-                              <SelectValue placeholder="เลือก" />
-                            </SelectTrigger>
-                            <SelectContent className={notoSansThai.className}>
-                              <SelectItem value="__none__" className={notoSansThai.className}>กรุณาเลือก</SelectItem>
-                              {users.map(u => (
-                                <SelectItem key={u.id_code} value={u.name} className={notoSansThai.className}>{u.name}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      ))}
+                      {[1, 2, 3, 4].map((position) => {
+                        // กรองผู้ปฏิบัติงานที่เลือกแล้วในช่องอื่นๆ ออก
+                        const selectedOperators = operators.filter((op, idx) => op && op !== "" && idx !== position - 1);
+                        const availableUsers = users.filter(u => !selectedOperators.includes(u.name));
+                        
+                        // ตรวจสอบว่าช่องก่อนหน้ายังว่างอยู่หรือไม่ (สำหรับ validation)
+                        const isPreviousEmpty = position > 1 && (!operators[position - 2] || operators[position - 2] === "");
+                        const isDisabled = isPreviousEmpty;
+                        
+                        return (
+                          <div key={position} className="space-y-1 sm:space-y-2">
+                            <Label className={`text-xs text-gray-600 ${isDisabled ? 'text-gray-400' : ''}`}>
+                              ผู้ปฏิบัติงาน {position}
+                              {isDisabled && <span className="ml-1 text-xs text-gray-400">(ต้องกรอกคนที่ {position - 1} ก่อน)</span>}
+                            </Label>
+                            <Select
+                              value={operators[position - 1] || "__none__"}
+                              onValueChange={(val) => {
+                                const newOps = [...operators];
+                                const newValue = val === "__none__" ? "" : val;
+                                newOps[position - 1] = newValue;
+                                
+                                // ถ้าเคลียร์ช่อง ให้เคลียร์ช่องถัดไปทั้งหมดด้วย
+                                if (newValue === "") {
+                                  for (let i = position; i < 4; i++) {
+                                    newOps[i] = "";
+                                  }
+                                }
+                                
+                                setOperators(newOps);
+                                // เมื่อผู้ใช้แก้ไข ให้ลบ focus
+                                setShouldFocusFields(false);
+                                setAutoFilledFields(new Set());
+                              }}
+                              disabled={isDisabled}
+                            >
+                              <SelectTrigger 
+                                ref={operatorsRefs[position - 1] as any}
+                                className={`h-8 sm:h-9 text-sm focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${shouldFocusFields && autoFilledFields.has('operators') && operators[position - 1] ? 'ring-2 ring-green-500 ring-offset-2' : ''} ${isDisabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                disabled={isDisabled}
+                              >
+                                <SelectValue placeholder={isDisabled ? "กรุณากรอกคนที่ " + (position - 1) + " ก่อน" : "เลือก"} />
+                              </SelectTrigger>
+                              <SelectContent className={notoSansThai.className}>
+                                <SelectItem value="__none__" className={notoSansThai.className}>กรุณาเลือก</SelectItem>
+                                {availableUsers.map(u => (
+                                  <SelectItem key={u.id_code} value={u.name} className={notoSansThai.className}>{u.name}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
 
                   {/* Time Slots */}
-                  <div className="space-y-3 sm:space-y-4">
+                  {/* ซ่อนฟิลด์เครื่องบันทึกข้อมูลการผลิต */}
+                  {/* <div className="space-y-3 sm:space-y-4">
                     <Label className="text-xs sm:text-sm font-bold text-gray-700">เครื่องบันทึกข้อมูลการผลิต</Label>
                     <Select
                       value={selectedMachine || "__none__"}
@@ -3226,7 +3617,7 @@ export default function MedicalAppointmentDashboard() {
                         ))}
                       </SelectContent>
                     </Select>
-                  </div>
+                  </div> */}
 
                   {/* Time Range */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
@@ -3234,8 +3625,23 @@ export default function MedicalAppointmentDashboard() {
                       <Label className="text-xs sm:text-sm font-bold text-gray-700">เวลาเริ่ม</Label>
                       <div className="relative">
                         <div className="relative">
-                          <Select value={startTime || "__none__"} onValueChange={val => setStartTime(val === "__none__" ? "" : val)}>
-                            <SelectTrigger className="text-sm pl-8">
+                          <Select value={startTime || "__none__"} onValueChange={val => {
+                            const newStartTime = val === "__none__" ? "" : val;
+                            setStartTime(newStartTime);
+                            
+                            // ถ้าเปลี่ยนเวลาเริ่ม และเวลาสิ้นสุดปัจจุบันน้อยกว่าหรือเท่ากับเวลาเริ่มใหม่ ให้เคลียร์เวลาสิ้นสุด
+                            if (newStartTime && endTime && endTime <= newStartTime) {
+                              setEndTime("");
+                            }
+                            
+                            // เมื่อผู้ใช้แก้ไข ให้ลบ focus
+                            setShouldFocusFields(false);
+                            setAutoFilledFields(new Set());
+                          }}>
+                            <SelectTrigger 
+                              ref={startTimeRef as any}
+                              className={`text-sm pl-8 ${shouldFocusFields && autoFilledFields.has('startTime') && startTime ? 'ring-2 ring-green-500 ring-offset-2' : ''}`}
+                            >
                               <SelectValue placeholder="เลือกเวลาเริ่ม..." />
                             </SelectTrigger>
                             <SelectContent className={notoSansThai.className}>
@@ -3253,15 +3659,31 @@ export default function MedicalAppointmentDashboard() {
                       <Label className="text-xs sm:text-sm font-bold text-gray-700">เวลาสิ้นสุด</Label>
                       <div className="relative">
                         <div className="relative">
-                          <Select value={endTime || "__none__"} onValueChange={val => setEndTime(val === "__none__" ? "" : val)}>
-                            <SelectTrigger className="text-sm pl-8">
+                          <Select value={endTime || "__none__"} onValueChange={val => {
+                            setEndTime(val === "__none__" ? "" : val);
+                            // เมื่อผู้ใช้แก้ไข ให้ลบ focus
+                            setShouldFocusFields(false);
+                            setAutoFilledFields(new Set());
+                          }}>
+                            <SelectTrigger 
+                              ref={endTimeRef as any}
+                              className={`text-sm pl-8 ${shouldFocusFields && autoFilledFields.has('endTime') && endTime ? 'ring-2 ring-green-500 ring-offset-2' : ''}`}
+                            >
                               <SelectValue placeholder="เลือกเวลาสิ้นสุด..." />
                             </SelectTrigger>
                             <SelectContent className={notoSansThai.className}>
                               <SelectItem value="__none__" className={notoSansThai.className}>เลือกเวลาสิ้นสุด...</SelectItem>
-                              {timeOptions.map(t => (
-                                <SelectItem key={t} value={t} className={notoSansThai.className}>{t}</SelectItem>
-                              ))}
+                              {timeOptions
+                                .filter(t => {
+                                  // ถ้ามีเวลาเริ่ม ให้แสดงเฉพาะเวลาที่มากกว่าเวลาเริ่ม
+                                  if (startTime && t <= startTime) {
+                                    return false;
+                                  }
+                                  return true;
+                                })
+                                .map(t => (
+                                  <SelectItem key={t} value={t} className={notoSansThai.className}>{t}</SelectItem>
+                                ))}
                             </SelectContent>
                           </Select>
                           <Clock className="w-3 h-3 sm:w-4 sm:h-4 text-gray-400 absolute left-2 sm:left-3 top-1/2 transform -translate-y-1/2" />
@@ -3286,9 +3708,17 @@ export default function MedicalAppointmentDashboard() {
                     <Label className="text-xs sm:text-sm font-bold text-gray-700">ห้องผลิต</Label>
                     <Select
                       value={selectedRoom || "__none__"}
-                      onValueChange={val => setSelectedRoom(val === "__none__" ? "" : val)}
+                      onValueChange={val => {
+                        setSelectedRoom(val === "__none__" ? "" : val);
+                        // เมื่อผู้ใช้แก้ไข ให้ลบ focus
+                        setShouldFocusFields(false);
+                        setAutoFilledFields(new Set());
+                      }}
                     >
-                      <SelectTrigger className="text-sm">
+                      <SelectTrigger 
+                        ref={roomRef as any}
+                        className={`text-sm ${shouldFocusFields && autoFilledFields.has('room') && selectedRoom ? 'ring-2 ring-green-500 ring-offset-2' : ''}`}
+                      >
                         <SelectValue placeholder="เลือกห้องผลิต..." />
                       </SelectTrigger>
                       <SelectContent className={notoSansThai.className}>
@@ -3401,7 +3831,7 @@ export default function MedicalAppointmentDashboard() {
                             </div>
                           </div>
 
-                          {/* คนที่ว่างงาน - แสดงเฉพาะเมื่อมีคนว่าง */}
+                          {/* คนที่ยังรับงานได้ - แสดงเฉพาะเมื่อมีคนว่าง */}
                           {summary.availableWorkers.length > 0 && (
                             <div className="bg-blue-50 p-3 rounded-lg border border-blue-200">
                               <div className="text-blue-600 font-medium mb-2">ผู้ปฏิบัติงานหลักที่ว่าง ({summary.availableWorkers.length} คน)</div>
@@ -3437,9 +3867,9 @@ export default function MedicalAppointmentDashboard() {
                             </div>
                             {showWorkerDetails && (
                               <div className="space-y-2">
-                                {/* แสดงคนที่ว่างงานก่อน */}
+                                {/* แสดงคนที่ยังรับงานได้ก่อน */}
                                 {summary.workerDetails.filter(worker => worker.status === 'available').length > 0 && (
-                                  <div className="text-xs font-semibold text-green-700 mb-2">🟢 คนที่ว่างงาน</div>
+                                  <div className="text-xs font-semibold text-green-700 mb-2">🟢 คนที่ยังรับงานได้</div>
                                 )}
                                 {summary.workerDetails
                                   .filter(worker => worker.status === 'available')
@@ -3478,9 +3908,9 @@ export default function MedicalAppointmentDashboard() {
                                 </div>
                                 ))}
                                 
-                                {/* แสดงคนที่เหลือเวลาน้อย */}
+                                {/* แสดงคนที่ใกล้เต็มเวลา */}
                                 {summary.workerDetails.filter(worker => worker.status === 'limited').length > 0 && (
-                                  <div className="text-xs font-semibold text-yellow-700 mb-2 mt-4">🟡 คนที่เหลือเวลาน้อย</div>
+                                  <div className="text-xs font-semibold text-yellow-700 mb-2 mt-4">🟡 คนที่ใกล้เต็มเวลา</div>
                                 )}
                                 {summary.workerDetails
                                   .filter(worker => worker.status === 'limited')
@@ -4168,33 +4598,52 @@ export default function MedicalAppointmentDashboard() {
               <div className="space-y-1">
                 <Label className={`text-xs font-bold text-gray-700 ${notoSansThai.className}`}>ผู้ปฏิบัติงาน (1-4 คน)</Label>
                 <div className="grid grid-cols-2 gap-2">
-                  {[1, 2, 3, 4].map((position) => (
-                    <div key={position} className="space-y-1">
-                      <Label className={`text-xs text-gray-600 ${notoSansThai.className}`}>ผู้ปฏิบัติงาน {position}</Label>
-                      <Select
-                        value={editOperators[position - 1] || "__none__"}
-                        onValueChange={val => {
-                          const newOps = [...editOperators];
-                          newOps[position - 1] = val === "__none__" ? "" : val;
-                          setEditOperators(newOps);
-                        }}
-                      >
-                        <SelectTrigger className={`h-8 text-xs ${notoSansThai.className}`}>
-                          <SelectValue placeholder="เลือก" />
-                        </SelectTrigger>
-                        <SelectContent className={notoSansThai.className}>
-                          <SelectItem value="__none__" className={notoSansThai.className}>กรุณาเลือก</SelectItem>
-                          {users && users.length > 0 ? (
-                            users.map(u => (
-                              <SelectItem key={u.id_code} value={u.name} className={notoSansThai.className}>{u.name}</SelectItem>
-                            ))
-                          ) : (
-                            <SelectItem value="__none__" className={notoSansThai.className}>ไม่พบข้อมูลผู้ปฏิบัติงาน</SelectItem>
-                          )}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  ))}
+                  {[1, 2, 3, 4].map((position) => {
+                    // ตรวจสอบว่าช่องก่อนหน้ายังว่างอยู่หรือไม่ (สำหรับ validation)
+                    const isPreviousEmpty = position > 1 && (!editOperators[position - 2] || editOperators[position - 2] === "");
+                    const isDisabled = isPreviousEmpty;
+                    
+                    return (
+                      <div key={position} className="space-y-1">
+                        <Label className={`text-xs text-gray-600 ${notoSansThai.className} ${isDisabled ? 'text-gray-400' : ''}`}>
+                          ผู้ปฏิบัติงาน {position}
+                          {isDisabled && <span className="ml-1 text-xs text-gray-400">(ต้องกรอกคนที่ {position - 1} ก่อน)</span>}
+                        </Label>
+                        <Select
+                          value={editOperators[position - 1] || "__none__"}
+                          onValueChange={val => {
+                            const newOps = [...editOperators];
+                            const newValue = val === "__none__" ? "" : val;
+                            newOps[position - 1] = newValue;
+                            
+                            // ถ้าเคลียร์ช่อง ให้เคลียร์ช่องถัดไปทั้งหมดด้วย
+                            if (newValue === "") {
+                              for (let i = position; i < 4; i++) {
+                                newOps[i] = "";
+                              }
+                            }
+                            
+                            setEditOperators(newOps);
+                          }}
+                          disabled={isDisabled}
+                        >
+                          <SelectTrigger className={`h-8 text-xs ${notoSansThai.className} ${isDisabled ? 'opacity-50 cursor-not-allowed' : ''}`} disabled={isDisabled}>
+                            <SelectValue placeholder={isDisabled ? "กรุณากรอกคนที่ " + (position - 1) + " ก่อน" : "เลือก"} />
+                          </SelectTrigger>
+                          <SelectContent className={notoSansThai.className}>
+                            <SelectItem value="__none__" className={notoSansThai.className}>กรุณาเลือก</SelectItem>
+                            {users && users.length > 0 ? (
+                              users.map(u => (
+                                <SelectItem key={u.id_code} value={u.name} className={notoSansThai.className}>{u.name}</SelectItem>
+                              ))
+                            ) : (
+                              <SelectItem value="__none__" className={notoSansThai.className}>ไม่พบข้อมูลผู้ปฏิบัติงาน</SelectItem>
+                            )}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
               {/* เวลาเริ่ม-สิ้นสุด */}
@@ -4356,6 +4805,150 @@ export default function MedicalAppointmentDashboard() {
           </DialogFooter>
         </DialogContent>
               </Dialog>
+
+        {/* Dialog สำหรับถามว่าจะใช้ข้อมูลตามแผนหรือไม่ */}
+        <Dialog open={showAutoFillDialog} onOpenChange={setShowAutoFillDialog}>
+          <DialogContent className={notoSansThai.className}>
+            <DialogHeader>
+              <DialogTitle className="text-green-600">เลือกวิธีการกรอกข้อมูล</DialogTitle>
+            </DialogHeader>
+            <div className="py-4">
+              <div className="mb-4 text-gray-700 font-medium">
+                <p className="font-bold">{pendingJobData?.jobCode} - {pendingJobData?.jobName}</p>
+                <p className="mt-1">กรุณาเลือกรูปแบบการกรอกข้อมูล:</p>
+              </div>
+              
+              {/* Radio Button Options */}
+              <RadioGroup 
+                value={autoFillOption || ''} 
+                onValueChange={(value) => {
+                  const newValue = value as 'latest' | 'best' | 'manual' | null;
+                  setAutoFillOption(newValue);
+                }}
+                className="space-y-3 mb-4"
+              >
+                {/* ข้อมูลประวัติการผลิตย้อนหลัง (disabled) */}
+                <div className="flex items-center space-x-3 opacity-50">
+                  <RadioGroupItem value="best" id="best" disabled />
+                  <label 
+                    htmlFor="best" 
+                    className="text-sm font-medium leading-none cursor-not-allowed flex-1"
+                  >
+                    <div className="text-gray-500">ข้อมูลประวัติการผลิตย้อนหลัง</div>
+                  </label>
+                </div>
+                
+                {/* ข้อมูลตามแผนผลิตครั่งล่าสุด */}
+                <div className="flex items-start space-x-3">
+                  <RadioGroupItem value="latest" id="latest" className="mt-0.5" />
+                  <div className="flex-1">
+                    <label 
+                      htmlFor="latest" 
+                      className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer block"
+                    >
+                      <div className="text-gray-700">ข้อมูลตามแผนผลิตครั่งล่าสุด</div>
+                    </label>
+                    {/* แสดงข้อมูลออกมาเลยเมื่อมีข้อมูล */}
+                    {pendingLatestData && (
+                      <div className="mt-2 ml-0 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                        <div className="space-y-2 text-sm">
+                          {/* ผู้ปฏิบัติงาน */}
+                          {pendingLatestData.operators && Array.isArray(pendingLatestData.operators) && pendingLatestData.operators.filter((op: string) => op && op !== '').length > 0 && (
+                            <div className="flex items-start gap-2">
+                              <span className="font-semibold text-gray-700 min-w-[100px]">ผู้ปฏิบัติงาน:</span>
+                              <span className="text-gray-800 flex-1">
+                                {pendingLatestData.operators.filter((op: string) => op && op !== '').join(' ')}
+                              </span>
+                            </div>
+                          )}
+                          
+                          {/* เวลา */}
+                          {(pendingLatestData.start_time || pendingLatestData.end_time) && (
+                            <div className="flex items-start gap-2">
+                              <span className="font-semibold text-gray-700 min-w-[100px]">เวลา:</span>
+                              <span className="text-gray-800 flex-1">
+                                {pendingLatestData.start_time ? normalizeTimeForForm(pendingLatestData.start_time) : '--'}
+                                {' - '}
+                                {pendingLatestData.end_time ? normalizeTimeForForm(pendingLatestData.end_time) : '--'}
+                              </span>
+                            </div>
+                          )}
+                          
+                          {/* ห้องผลิต */}
+                          <div className="flex items-start gap-2">
+                            <span className="font-semibold text-gray-700 min-w-[100px]">ห้องผลิต:</span>
+                            <span className="text-gray-800 flex-1">
+                              {pendingLatestData.room_name || pendingLatestData.room_code || 'ไม่มีข้อมูล'}
+                            </span>
+                          </div>
+                          
+                          {/* วันที่ที่ดึงข้อมูลมา */}
+                          {pendingLatestData.production_date && (() => {
+                            const dataDate = createSafeDate(pendingLatestData.production_date);
+                            const today = new Date();
+                            today.setHours(0, 0, 0, 0);
+                            if (dataDate) {
+                              dataDate.setHours(0, 0, 0, 0);
+                              const diffTime = today.getTime() - dataDate.getTime();
+                              const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+                              const formattedDate = formatDateThaiShort(dataDate);
+                              let dayText = '';
+                              if (diffDays === 0) {
+                                dayText = 'วันนี้';
+                              } else if (diffDays === 1) {
+                                dayText = '1 วันที่แล้ว';
+                              } else {
+                                dayText = `${diffDays} วันที่แล้ว`;
+                              }
+                              return (
+                                <div className="flex items-start gap-2 mt-2 pt-2 border-t border-gray-300 text-xs">
+                                  <span className="font-semibold text-gray-700 min-w-[100px]">ข้อมูลจากวันที่:</span>
+                                  <span className="text-gray-800 flex-1">
+                                    {formattedDate} ({dayText})
+                                  </span>
+                                </div>
+                              );
+                            }
+                            return null;
+                          })()}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                
+                {/* กำหนดข้อมูลด้วยตัวเอง */}
+                <div className="flex items-center space-x-3">
+                  <RadioGroupItem value="manual" id="manual" />
+                  <label 
+                    htmlFor="manual" 
+                    className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer flex-1"
+                  >
+                    <div className="text-gray-700">กำหนดข้อมูลด้วยตัวเอง</div>
+                  </label>
+                </div>
+              </RadioGroup>
+            </div>
+            <DialogFooter>
+              <Button
+                onClick={() => {
+                  if (autoFillOption === 'latest' && pendingJobData && pendingLatestData) {
+                    applyAutoFillData(pendingLatestData, pendingJobData.jobName);
+                  }
+                  setShowAutoFillDialog(false);
+                  setPendingJobData(null);
+                  setPendingLatestData(null);
+                  setAutoFillOption(null); // Reset to null (ยังไม่เลือก)
+                  setExpandedOption(null);
+                }}
+                className="w-full bg-green-600 hover:bg-green-700 text-white focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+                disabled={autoFillOption === null}
+              >
+                ตกลง
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Time Table Popup Dialog - ใช้ Component ใหม่ */}
         <TimeTablePopup

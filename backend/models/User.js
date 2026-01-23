@@ -11,6 +11,7 @@ class User {
           name
         FROM users
         WHERE id_code NOT IN ('EMP001', 'EMP002', 'EMP003', 'EMP004', 'EMP005', 'EMP006', 'EMP007', 'EMP008', 'EMP009')
+          AND (is_active = 1 OR is_active IS NULL)
         ORDER BY name
       `;
       

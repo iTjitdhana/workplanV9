@@ -52,49 +52,35 @@ const staffImages: { [key: string]: string } = {
 
 // พาเลตสีแบบ tailwind ตามที่ผู้ใช้กำหนด (โทนอ่อน)
 export const COLOR_PALETTE = [
-  // 200 tones (very soft)
-  'bg-rose-200',
-  'bg-red-200',
-  'bg-orange-200',
-  'bg-amber-200',
-  'bg-yellow-200',
-  'bg-lime-200',
-  'bg-green-200',
-  'bg-emerald-200',
-  'bg-teal-200',
-  'bg-cyan-200',
-  'bg-sky-200',
-  'bg-blue-200',
-  'bg-indigo-200',
-  'bg-violet-200',
-  'bg-purple-200',
-  'bg-fuchsia-200',
-  'bg-pink-200',
-  'bg-stone-200',
-  'bg-slate-200',
-  'bg-zinc-200',
-  // 300 tones (still soft, extend capacity)
-  'bg-rose-300',
-  'bg-red-300',
-  'bg-orange-300',
-  'bg-amber-300',
-  'bg-yellow-300',
-  'bg-lime-300',
-  'bg-green-300',
-  'bg-emerald-300',
-  'bg-teal-300',
-  'bg-cyan-300',
-  'bg-sky-300',
-  'bg-blue-300',
-  'bg-indigo-300',
-  'bg-violet-300',
-  'bg-purple-300',
-  'bg-fuchsia-300',
-  'bg-pink-300',
-  'bg-stone-300',
-  'bg-slate-300',
-  'bg-zinc-300',
+  'bg-blue-200',     // 1 - น้ำเงิน
+  'bg-purple-200',   // 2 - ม่วง
+  'bg-violet-200',   // 3 - ม่วงอ่อน
+  'bg-pink-200',     // 4 - ชมพู
+  'bg-cyan-200',     // 5 - ฟ้าอมเขียว
+  'bg-sky-200',      // 6 - ฟ้า
+  'bg-indigo-200',   // 7 - คราม
+  'bg-amber-300',    // 8 - น้ำตาลกาแฟ (แทน slate-200) - โทนน้ำตาลกาแฟ
+  'bg-amber-400',    // 9 - น้ำตาลกาแฟเข้ม (แทน gray-200) - โทนน้ำตาลกาแฟเข้ม
+  'bg-yellow-200',   // 10 - เหลือง (ไม่ใช่ส้ม)
+  'bg-fuchsia-200',  // 11 - ม่วงชมพู
+  'bg-rose-200',     // 12 - ชมพูอ่อน (ไม่ใช่แดง)
 ]
+
+// แปลง Tailwind class เป็น CSS color สำหรับ inline style
+const tailwindToColor: Record<string, string> = {
+  'bg-blue-200': '#bfdbfe',      // blue-200
+  'bg-purple-200': '#e9d5ff',    // purple-200
+  'bg-violet-200': '#ddd6fe',     // violet-200
+  'bg-pink-200': '#fbcfe8',       // pink-200
+  'bg-cyan-200': '#a5f3fc',       // cyan-200
+  'bg-sky-200': '#bae6fd',        // sky-200
+  'bg-indigo-200': '#c7d2fe',     // indigo-200
+  'bg-amber-300': '#fcd34d',      // amber-300
+  'bg-amber-400': '#fbbf24',      // amber-400
+  'bg-yellow-200': '#fef08a',     // yellow-200
+  'bg-fuchsia-200': '#f5d0fe',    // fuchsia-200
+  'bg-rose-200': '#fecdd3',       // rose-200
+}
 
 // สีสำหรับแต่ละคน (ยังเก็บไว้สำหรับอนาคต)
 const workerColors: { [key: string]: string } = {
@@ -129,38 +115,7 @@ function getTimeTableData(jobs: TimeTableJob[], users: User[]): TimeTableData {
   // 2. รวบรวมคนทั้งหมดและงานที่แต่ละคนทำ
   const personJobMap: Record<string, TimeTableJob[]> = {};
   const jobColorMap: Record<string, string> = {};
-  let colorIndex = 0;
-  
-  // Fixed pastel-like palette (provided by user)
-  const pastelByIndex = (idx: number) => COLOR_PALETTE[idx % COLOR_PALETTE.length];
-
-  // Generate pastel HSL deterministically from job key, with minimum hue separation
-  const colorCache = new Map<string, string>();
-  const usedHues: number[] = [];
-  const hslFromKey = (key: string): string => {
-    if (colorCache.has(key)) return colorCache.get(key)!;
-    let hash = 0;
-    for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
-    // base hue from hash, then spread with golden angle for better dispersion
-    let hue = (hash % 360);
-    const golden = TIMETABLE_CONSTANTS.COLOR.GOLDEN_ANGLE;
-    let attempt = 0;
-    const dist = (a: number, b: number) => Math.min(Math.abs(a - b), 360 - Math.abs(a - b));
-    while (usedHues.some(h => dist(h, hue) < TIMETABLE_CONSTANTS.COLOR.MIN_HUE_GAP) && attempt < TIMETABLE_CONSTANTS.COLOR.MAX_HUE_ATTEMPTS) {
-      // jump by golden angle, and occasionally jump 180° to escape clusters
-      hue = (hue + (attempt % 2 === 0 ? golden : 180)) % 360;
-      attempt++;
-    }
-    usedHues.push(hue);
-    // Alternate S/L to increase perceived difference even when hue distance passes threshold
-    const satOptions = TIMETABLE_CONSTANTS.COLOR.SATURATION_OPTIONS;
-    const lightOptions = TIMETABLE_CONSTANTS.COLOR.LIGHTNESS_OPTIONS;
-    const saturation = satOptions[usedHues.length % satOptions.length];
-    const lightness = lightOptions[usedHues.length % lightOptions.length];
-    const hsl = `hsl(${hue.toFixed(1)}, ${saturation}%, ${lightness}%)`;
-    colorCache.set(key, hsl);
-    return hsl;
-  };
+  let colorIndex = 0; // ตัวนับสำหรับเรียงสีตามลำดับงาน
 
   workPlanJobs.forEach((job) => {
     // ใช้เฉพาะ operators_from_join (จาก work_plan_operators)
@@ -172,10 +127,13 @@ function getTimeTableData(jobs: TimeTableJob[], users: User[]): TimeTableData {
     // Use job identifier only (same job gets same color everywhere)
     const jobKeySimple = String(job.job_code || job.job_name || "unknown");
     
-    // กำหนดสีให้กับงานนี้
+    // กำหนดสีให้กับงานนี้ (เรียงตามลำดับงานที่เจอครั้งแรก)
     if (!jobColorMap[jobKeySimple]) {
-      // Prefer deterministic HSL with separation; fallback to palette if needed
-      jobColorMap[jobKeySimple] = hslFromKey(jobKeySimple) || pastelByIndex(colorIndex++);
+      // เลือกสีจาก palette ตามลำดับ (งานแรก = สีแรก, งานที่สอง = สีที่สอง)
+      const paletteIndex = colorIndex % COLOR_PALETTE.length;
+      const tailwindClass = COLOR_PALETTE[paletteIndex];
+      jobColorMap[jobKeySimple] = tailwindToColor[tailwindClass] || tailwindToColor['bg-blue-200'];
+      colorIndex++; // เพิ่มตัวนับสำหรับงานถัดไป
     }
     
     // เพิ่มงานเข้าไปในแต่ละคน
@@ -299,13 +257,21 @@ function TimeTable({ jobs, users }: { jobs: TimeTableJob[], users: User[] }) {
   const { timeSlots, data } = getTimeTableData(jobs, users);
 
   // Helper: map time string HH:mm or special slot to slot index
+  // หา slot ที่ครอบคลุมเวลานั้น (เช่น 08:15 อยู่ใน slot 08:00-08:30)
   const slotIndexForTime = (t: string): number => {
+    let lastValidIndex = 0;
     for (let i = 0; i < timeSlots.length; i++) {
       const s = timeSlots[i];
       if (isLunchSlot(s)) continue;
-      if (s >= t) return i;
+      // ถ้า slot >= t แสดงว่า slot นี้เริ่มหลังจาก t แล้ว
+      // ดังนั้น slot ที่ถูกต้องคือ slot ก่อนหน้านี้ (lastValidIndex)
+      if (s > t) {
+        return lastValidIndex;
+      }
+      // ถ้า slot <= t ให้เก็บ index นี้ไว้
+      lastValidIndex = i;
     }
-    return timeSlots.length - 1;
+    return lastValidIndex;
   };
 
   // Build lanes for overlapping jobs per person
@@ -322,16 +288,34 @@ function TimeTable({ jobs, users }: { jobs: TimeTableJob[], users: User[] }) {
       const startTime = j.start_time || '00:00';
       const endTime = j.end_time || '00:00';
       const startIdx = slotIndexForTime(startTime);
-      let endIdx = (endTime === TIMETABLE_CONSTANTS.LUNCH_BREAK.START && lunchIndex !== -1)
-        ? lunchIndex
-        : timeSlots.findIndex(s => !isLunchSlot(s) && s >= endTime);
       
-      // ถ้า end_time >= 17:00 ให้จบที่ขอบขวาของ slot สุดท้าย (ไม่ให้เลยตาราง)
-      if (endTime >= TIMETABLE_CONSTANTS.WORK_HOURS.END) {
+      // คำนวณ endIdx: หา slot ถัดไปหลังจาก slot ที่ครอบคลุม endTime
+      let endIdx: number;
+      if (endTime === TIMETABLE_CONSTANTS.LUNCH_BREAK.START && lunchIndex !== -1) {
+        endIdx = lunchIndex;
+      } else if (endTime >= TIMETABLE_CONSTANTS.WORK_HOURS.END) {
+        // ถ้า end_time >= 17:00 ให้จบที่ขอบขวาของ slot สุดท้าย
         endIdx = timeSlots.length;
-      } else if (endIdx === -1) {
-        // ถ้าไม่เจอ slot (กรณีพิเศษอื่นๆ) ให้จบที่ slot สุดท้าย
-        endIdx = timeSlots.length;
+      } else {
+        // หา slot ที่ครอบคลุม endTime โดยใช้ slotIndexForTime
+        const endSlotIdx = slotIndexForTime(endTime);
+        // หา slot ถัดไป (ข้าม lunch slot ถ้ามี)
+        let nextSlotIdx = endSlotIdx + 1;
+        while (nextSlotIdx < timeSlots.length && isLunchSlot(timeSlots[nextSlotIdx])) {
+          nextSlotIdx++;
+        }
+        if (nextSlotIdx < timeSlots.length) {
+          const nextSlotTime = timeSlots[nextSlotIdx];
+          if (endTime === nextSlotTime) {
+            // endTime ตรงกับจุดเริ่มต้นของ slot ถัดไป = จบที่จุดสิ้นสุดของ slot ปัจจุบัน
+            endIdx = nextSlotIdx;
+          } else {
+            // endTime อยู่ใน slot ปัจจุบัน = ใช้ slot ถัดไป
+            endIdx = nextSlotIdx;
+          }
+        } else {
+          endIdx = timeSlots.length;
+        }
       }
       
       // ตรวจสอบว่า endIdx ไม่เกิน timeSlots.length (ไม่ให้เลยตาราง)
@@ -358,7 +342,7 @@ function TimeTable({ jobs, users }: { jobs: TimeTableJob[], users: User[] }) {
         endIdx,
         lane,
         jobName: j.job_name || '',
-        color: j.jobColor || TIMETABLE_CONSTANTS.COLOR.DEFAULT_COLOR,
+        color: j.jobColor || tailwindToColor[COLOR_PALETTE[0]],
         startStr,
         endStr,
         durationStr
@@ -535,33 +519,105 @@ function TimeTable({ jobs, users }: { jobs: TimeTableJob[], users: User[] }) {
                       </div>
                       {/* blocks */}
                       {blocks.map((b, i) => {
-                        // support 15-min granularity inside a 30-min column
+                        // คำนวณตำแหน่งและความกว้างจาก startTime และ endTime จริง
                         const [sH, sM] = (b.startStr || '00:00').split(':').map(Number)
                         const [eH, eM] = (b.endStr || '00:00').split(':').map(Number)
-                        let leftCols = b.startIdx
-                        let widthCols = (b.endIdx - b.startIdx)
                         
-                        // ✅ ตรวจสอบว่า widthCols ไม่เกินจำนวน slots (ไม่ให้เลยตาราง)
-                        if (widthCols > timeSlots.length - b.startIdx) {
-                          widthCols = timeSlots.length - b.startIdx;
-                        }
-                        
-                        // if starts at :15 inside a normal 30-min cell
-                        if (sM % 30 === 15) {
-                          if (b.startStr === '13:15') {
-                            // special 45-min slot: expand width by 0.5 but don't shift left
-                            widthCols += 0.5
-                          } else {
-                            leftCols += 0.5
-                            widthCols -= 0.5
+                        // หา slot time ของ slot ที่ startIdx
+                        const startSlotTime = timeSlots[b.startIdx];
+                        let startSlotMinutes = 0;
+                        let startSlotDuration = 30; // default 30 minutes
+                        if (isLunchSlot(startSlotTime)) {
+                          // lunch break slot (12:30-13:15) = 45 minutes
+                          const [slH, slM] = TIMETABLE_CONSTANTS.LUNCH_BREAK.START.split(':').map(Number);
+                          startSlotMinutes = slH * 60 + slM;
+                          startSlotDuration = 45;
+                        } else if (startSlotTime) {
+                          const [ssH, ssM] = startSlotTime.split(':').map(Number);
+                          startSlotMinutes = ssH * 60 + ssM;
+                          // ตรวจสอบว่าเป็นช่อง 45 นาทีหรือไม่ (12:30-13:15 หรือ 13:15-14:00)
+                          if ((ssH === 12 && ssM === 30) || (ssH === 13 && ssM === 15)) {
+                            startSlotDuration = 45; // 45 minutes = 3 ช่อง 15 นาที
                           }
                         }
-                        // if ends at :15 reduce width by half a column
-                        if (eM % 30 === 15) {
-                          widthCols -= 0.5
+                        
+                        // คำนวณ offset ภายใน slot แรก (ใช้ slotDuration ที่ถูกต้อง)
+                        const startMinutes = sH * 60 + sM;
+                        const startOffset = startSlotMinutes > 0 ? (startMinutes - startSlotMinutes) / startSlotDuration : 0;
+                        // จำกัด offset ระหว่าง 0-1
+                        const startOffsetClamped = Math.max(0, Math.min(1, startOffset));
+                        
+                        // คำนวณ leftCols
+                        let leftCols = b.startIdx + startOffsetClamped;
+                        
+                        // หา slot time ของ slot สุดท้ายที่งานครอบคลุม
+                        // ใช้ slotIndexForTime เพื่อหา slot ที่ครอบคลุม endTime
+                        // slotIndexForTime จะคืนค่า slot ที่ครอบคลุม endTime อยู่แล้ว
+                        // (เช่น 14:15 อยู่ใน slot 14:00-14:30, slotIndexForTime จะคืนค่า index ของ slot "14:00")
+                        const endSlotIdx = slotIndexForTime(b.endStr);
+                        const endSlotTime = timeSlots[endSlotIdx];
+                        let endSlotMinutes = 0;
+                        let endSlotDuration = 30; // default 30 minutes
+                        if (isLunchSlot(endSlotTime)) {
+                          // lunch break slot (12:30-13:15) = 45 minutes
+                          const [elH, elM] = TIMETABLE_CONSTANTS.LUNCH_BREAK.START.split(':').map(Number);
+                          endSlotMinutes = elH * 60 + elM;
+                          endSlotDuration = 45; // lunch break is 45 minutes
+                        } else if (endSlotTime) {
+                          const [esH, esM] = endSlotTime.split(':').map(Number);
+                          endSlotMinutes = esH * 60 + esM;
+                          // ตรวจสอบว่าเป็นช่อง 45 นาทีหรือไม่ (12:30-13:15 หรือ 13:15-14:00)
+                          if ((esH === 12 && esM === 30) || (esH === 13 && esM === 15)) {
+                            endSlotDuration = 45; // 45 minutes = 3 ช่อง 15 นาที
+                          }
                         }
                         
-                        // ✅ ตรวจสอบอีกครั้งหลังปรับ widthCols
+                        // คำนวณ offset ภายใน slot สุดท้าย (ใช้ endSlotDuration ที่ถูกต้อง)
+                        const endMinutes = eH * 60 + eM;
+                        let endOffset = 0;
+                        if (endSlotMinutes > 0) {
+                          // ตรวจสอบว่า endTime ตรงกับจุดเริ่มต้นของ slot ถัดไปหรือไม่
+                          // หา slot ถัดไป (ข้าม lunch slot ถ้ามี)
+                          let nextSlotIdx = endSlotIdx + 1;
+                          while (nextSlotIdx < timeSlots.length && isLunchSlot(timeSlots[nextSlotIdx])) {
+                            nextSlotIdx++;
+                          }
+                          if (nextSlotIdx < timeSlots.length) {
+                            const nextSlotTime = timeSlots[nextSlotIdx];
+                            if (b.endStr === nextSlotTime) {
+                              // endTime ตรงกับจุดเริ่มต้นของ slot ถัดไป = จบที่จุดสิ้นสุดของ slot ปัจจุบัน
+                              endOffset = 1.0;
+                            } else {
+                              // endTime อยู่ใน slot ปัจจุบัน
+                              endOffset = (endMinutes - endSlotMinutes) / endSlotDuration;
+                            }
+                          } else {
+                            // ไม่มี slot ถัดไป
+                            endOffset = (endMinutes - endSlotMinutes) / endSlotDuration;
+                          }
+                        }
+                        // จำกัด offset ระหว่าง 0-1
+                        const endOffsetClamped = Math.max(0, Math.min(1, endOffset));
+                        
+                        // คำนวณ widthCols
+                        // ความกว้าง = ระยะห่างจากจุดเริ่มต้นถึงจุดสิ้นสุด
+                        // = ส่วนที่เหลือใน slot แรก + slot เต็มระหว่างกลาง + ส่วนที่ใช้ใน slot สุดท้าย
+                        // ใช้ endSlotIdx แทน endIdx เพื่อคำนวณจำนวน slot ระหว่างกลางให้ถูกต้อง
+                        let widthCols: number;
+                        if (endSlotIdx === b.startIdx) {
+                          // งานอยู่ใน slot เดียวกัน
+                          widthCols = endOffsetClamped - startOffsetClamped;
+                        } else {
+                          // งานครอบคลุมหลาย slot
+                          // = ส่วนที่เหลือใน slot แรก + slot เต็มระหว่างกลาง + ส่วนที่ใช้ใน slot สุดท้าย
+                          // ใช้ endSlotIdx เพื่อคำนวณจำนวน slot ระหว่างกลาง
+                          const firstSlotPortion = 1 - startOffsetClamped;
+                          const middleSlots = Math.max(0, endSlotIdx - b.startIdx - 1);
+                          const lastSlotPortion = endOffsetClamped;
+                          widthCols = firstSlotPortion + middleSlots + lastSlotPortion;
+                        }
+                        
+                        // ✅ ตรวจสอบว่า widthCols ไม่เกินจำนวน slots (ไม่ให้เลยตาราง)
                         if (widthCols > timeSlots.length - leftCols) {
                           widthCols = timeSlots.length - leftCols;
                         }
@@ -831,4 +887,5 @@ export function TimeTablePopup({ open, onOpenChange, selectedDate, jobs, users }
     </Dialog>
   )
 }
+
 

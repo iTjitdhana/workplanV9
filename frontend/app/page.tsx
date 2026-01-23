@@ -32,17 +32,17 @@ export default function HomePage() {
             // Redirect ไปยังหน้า home ของบทบาทนั้น
             router.push(`${rolePrefix}/home`);
           } else {
-            setError('ไม่พบบทบาทที่กำหนด');
-            setLoading(false);
+            // ถ้าไม่มีบทบาทที่กำหนด ให้ไปหน้า planner/home
+            router.push('/planner/home');
           }
         } else {
-          // ถ้าไม่มีบทบาท ให้ไปหน้า login
-          router.push('/login');
+          // ถ้าไม่มีบทบาท ให้ไปหน้า planner/home โดยตรง (ไม่ต้อง login)
+          router.push('/planner/home');
         }
       } catch (error) {
         debugError('Error redirecting:', error);
-        setError('ไม่สามารถ redirect ได้');
-        setLoading(false);
+        // ถ้าเกิด error ให้ redirect ไปหน้า planner/home
+        router.push('/planner/home');
       }
     };
 

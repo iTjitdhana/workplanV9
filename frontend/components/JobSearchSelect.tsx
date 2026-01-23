@@ -38,6 +38,18 @@ export const JobSearchSelect: React.FC<JobSearchSelectProps> = ({
     setIsClient(true);
   }, []);
 
+  // Sync inputValue กับ value เมื่อมีการเลือกค่าแล้ว
+  useEffect(() => {
+    // ถ้ามี value แต่ไม่มี inputValue (ยังไม่ได้พิมพ์) ให้ตั้ง inputValue เป็น value
+    // แต่ไม่ต้องทำถ้า inputValue มีค่าอยู่แล้ว (กำลังพิมพ์อยู่)
+    if (value && !inputValue) {
+      // ใช้ setTimeout เพื่อให้ cursor อยู่ท้ายคำ
+      setTimeout(() => {
+        setInputValue(value);
+      }, 0);
+    }
+  }, [value]);
+
   // สร้าง selected value
   const selectedValue = useMemo(() => {
     if (!value) return null;
@@ -129,8 +141,11 @@ export const JobSearchSelect: React.FC<JobSearchSelectProps> = ({
         // งานที่มีอยู่แล้วในระบบ
         onChange(newValue.job_code, newValue.job_name);
       }
+      // Clear inputValue เมื่อเลือกค่าแล้ว เพื่อให้เมื่อคลิกแก้ไข cursor อยู่ท้ายคำ
+      setInputValue('');
     } else {
       onChange('', '');
+      setInputValue('');
     }
   }, [onChange, onAddNew]);
 
@@ -144,6 +159,17 @@ export const JobSearchSelect: React.FC<JobSearchSelectProps> = ({
       loadOptions(newValue);
     }
   }, [loadOptions]);
+
+  // จัดการเมื่อ focus ที่ input เพื่อให้ cursor อยู่ท้ายคำ
+  const handleFocus = useCallback(() => {
+    // ถ้ามี value ที่เลือกอยู่แล้ว ให้ตั้ง inputValue เป็น value นั้นเพื่อให้ cursor อยู่ท้าย
+    if (value) {
+      // ใช้ setTimeout เพื่อให้ cursor อยู่ท้ายคำ
+      setTimeout(() => {
+        setInputValue(value);
+      }, 0);
+    }
+  }, [value]);
 
   // Custom styles
   const customStyles = {
@@ -199,6 +225,7 @@ export const JobSearchSelect: React.FC<JobSearchSelectProps> = ({
         value={selectedValue}
         onChange={handleChange}
         onInputChange={handleInputChange}
+        onFocus={handleFocus}
         options={options}
         isLoading={isLoading}
         isDisabled={isDisabled}
@@ -219,6 +246,14 @@ export const JobSearchSelect: React.FC<JobSearchSelectProps> = ({
         menuPlacement="auto"
         filterOption={() => true} // ปิด client-side filter
         inputValue={inputValue}
+        onMenuOpen={() => {
+          // เมื่อเปิด menu ให้ตั้ง inputValue เป็น value ที่เลือกเพื่อให้ cursor อยู่ท้าย
+          if (value) {
+            setTimeout(() => {
+              setInputValue(value);
+            }, 0);
+          }
+        }}
       />
     </div>
   );
