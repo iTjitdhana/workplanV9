@@ -176,6 +176,8 @@ class WorkPlanController {
         status_name: wp.status_name,
         status_color: wp.status_color,
         is_finished: wp.is_finished,
+        workflow_status: wp.workflow_status, // เพิ่ม workflow_status เพื่อให้ frontend เช็คได้ว่าเป็น draft หรือไม่
+        job_type: wp.job_type, // เพิ่ม job_type เพื่อให้ frontend เช็คได้ว่าเป็น default หรือไม่
         // เพิ่มเฉพาะข้อมูลที่ frontend ใช้จริง
         ...(wp.operators_from_join && { operators_from_join: wp.operators_from_join }),
         ...(wp.production_room_name && { production_room_name: wp.production_room_name }),
@@ -313,20 +315,22 @@ class WorkPlanController {
         });
       }
       
-      // อนุญาตให้ลบเมื่อ workflow_status เป็น 'draft' หรือ 'completed'
+      // อนุญาตให้ลบเมื่อ workflow_status เป็น 'draft', 'completed' หรือ 'printed'
       const status = String(workPlan.workflow_status || '').toLowerCase();
-      if (status === 'draft' || status === 'completed') {
+      const statusId = workPlan.status_id != null ? Number(workPlan.status_id) : null;
+      const isPrinted = status === 'printed' || statusId === 3;
+      if (status === 'draft' || status === 'completed' || isPrinted) {
         const deleted = await WorkPlan.delete(id);
         if (deleted) {
-          return res.json({ success: true, message: 'Draft work plan deleted successfully' });
+          return res.json({ success: true, message: 'Work plan deleted successfully' });
         }
         return res.status(400).json({ success: false, message: 'Failed to delete work plan' });
       }
       
-      // กรณีไม่ใช่ draft ให้บล็อคการลบ และแนะนำให้ใช้ "ยกเลิกการผลิต"
+      // กรณีงานกำลังดำเนินการหรือเสร็จสิ้นแล้ว ให้บล็อคการลบ และแนะนำให้ใช้ "ยกเลิกการผลิต"
       return res.status(403).json({
         success: false,
-        message: 'ไม่สามารถลบงานผลิตที่พิมพ์แล้วได้ กรุณาใช้ "ยกเลิกการผลิต" แทน'
+        message: 'ไม่สามารถลบงานนี้ได้ กรุณาใช้ "ยกเลิกการผลิต" แทน'
       });
       
     } catch (error) {

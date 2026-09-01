@@ -1,5 +1,7 @@
 const { pool } = require('../config/database');
 const { formatDateForDatabase } = require('../utils/dateUtils');
+const WorkPlanDefaults = require('./WorkPlanDefaults');
+const WorkPlanPrint = require('./WorkPlanPrint');
 
 class WorkPlan {
   // Get all work plans with operators (optimized version)
@@ -8,18 +10,16 @@ class WorkPlan {
       console.log('🔍 WorkPlan.getAll called with date:', date);
       console.log('🔍 Date type:', typeof date);
       
-      // Step 1: ดึงข้อมูล work plans พื้นฐานก่อน (เร็วกว่า) - Optimized fields
+      // Step 1: ดึงข้อมูล work plans (ไม่ใช้ job_type/workflow_status/is_printed เพื่อรองรับ DB ที่ยังไม่มีคอลัมน์เหล่านี้)
+      // ใช้ TIME_FORMAT เพื่อให้ start_time/end_time เป็น string "HH:MM" เสมอ (รวมงาน default A,B,C,D)
       let mainQuery = `
         SELECT 
           wp.id,
           DATE_FORMAT(wp.production_date, '%Y-%m-%d') as production_date,
           wp.job_code,
           wp.job_name,
-          wp.job_type,
-          wp.workflow_status,
-          wp.is_printed,
-          wp.start_time,
-          wp.end_time,
+          TIME_FORMAT(wp.start_time, '%H:%i') as start_time,
+          TIME_FORMAT(wp.end_time, '%H:%i') as end_time,
           wp.machine_id,
           wp.production_room_id,
           wp.notes,
@@ -83,14 +83,9 @@ class WorkPlan {
         mainQuery += ` WHERE ${conditions.join(' AND ')}`;
       }
       
-      // เรียงลำดับ: default (ABCD) -> regular -> special, แล้วเรียงตามเวลาสร้าง
+      // เรียงลำดับ: งาน A,B,C,D ก่อน (A,B,C,D) แล้วค่อยงานอื่น (ใช้ job_code รองรับ DB ที่ไม่มี job_type)
       mainQuery += ` ORDER BY 
-        CASE wp.job_type
-          WHEN 'default' THEN 1
-          WHEN 'regular' THEN 2
-          WHEN 'special' THEN 3
-          ELSE 4
-        END ASC,
+        CASE WHEN wp.job_code = 'A' THEN 1 WHEN wp.job_code = 'B' THEN 2 WHEN wp.job_code = 'C' THEN 3 WHEN wp.job_code = 'D' THEN 4 ELSE 5 END ASC,
         wp.id ASC`;
       
       // เพิ่ม pagination
@@ -155,6 +150,18 @@ class WorkPlan {
           
           row.production_room_name = roomsMap.get(row.production_room_id) || null;
           row.machine_name = machinesMap.get(row.machine_id) || null;
+        });
+
+        // เติม job_type, workflow_status, is_printed ถ้า DB ไม่มีคอลัมน์ (ให้ frontend ใช้ได้)
+        const defaultCodes = ['A', 'B', 'C', 'D'];
+        rows.forEach(row => {
+          if (row.job_type == null) row.job_type = defaultCodes.includes(row.job_code) ? 'default' : 'regular';
+          // derive workflow_status จาก status_id (1=แบบร่าง, 2=บันทึกเสร็จสิ้น, 3=พิมพ์แล้ว, 4=เสร็จสิ้น)
+          if (row.workflow_status == null) {
+            const sid = row.status_id != null ? Number(row.status_id) : 1;
+            row.workflow_status = sid === 2 || sid === 4 ? 'completed' : sid === 3 ? 'printed' : 'draft';
+          }
+          if (row.is_printed == null) row.is_printed = 0;
         });
       }
       console.log('✅ Found work plans:', rows.length);
@@ -259,11 +266,10 @@ class WorkPlan {
           DATE_FORMAT(wp.production_date, '%Y-%m-%d') as production_date,
           wp.job_code,
           wp.job_name,
-          wp.job_type,
-          wp.workflow_status,
           wp.start_time,
           wp.end_time,
           wp.notes,
+          COALESCE(wp.status_id, 1) as status_id,
           ff.is_finished,
           ff.updated_at as finished_at
         FROM work_plans wp
@@ -278,6 +284,13 @@ class WorkPlan {
       }
       
       const workPlan = rows[0];
+      const defaultCodes = ['A', 'B', 'C', 'D'];
+      if (workPlan.job_type == null) workPlan.job_type = defaultCodes.includes(workPlan.job_code) ? 'default' : 'regular';
+      if (workPlan.workflow_status == null) {
+        const sid = workPlan.status_id != null ? Number(workPlan.status_id) : 1;
+        workPlan.workflow_status = sid === 2 || sid === 4 ? 'completed' : sid === 3 ? 'printed' : 'draft';
+      }
+      if (workPlan.is_printed == null) workPlan.is_printed = workPlan.workflow_status === 'printed' ? 1 : 0;
       
       // Get operators
       const operatorQuery = `
@@ -434,98 +447,6 @@ class WorkPlan {
     return timeString;
   }
 
-  // สร้างงาน Default (ABCD) อัตโนมัติ
-  // ✅ ปรับปรุง: เช็คทีละ job_code แทนการเช็ครวม (ละเอียดและแม่นยำกว่า)
-  static async createDefaultTasks(production_date) {
-    const connection = await pool.getConnection();
-    try {
-      await connection.beginTransaction();
-      
-      const formattedDate = formatDateForDatabase(production_date);
-      
-      console.log('🔍 Checking existing default tasks for:', formattedDate);
-      
-      // ✅ ปรับปรุง: เช็คทีละ job_code (ละเอียดกว่าเดิม)
-      // เช็คว่ามีงาน A, B, C, D ใดบ้างที่ยังไม่มีในวันนั้น
-      const [existing] = await connection.execute(`
-        SELECT job_code
-        FROM work_plans 
-        WHERE DATE(production_date) = ? 
-          AND job_code IN ('A', 'B', 'C', 'D')
-          AND job_type = 'default'
-      `, [formattedDate]);
-      
-      const existingCodes = existing.map(row => row.job_code);
-      console.log('📋 Existing default tasks:', existingCodes);
-      
-      // สร้างงาน ABCD
-      const defaultTasks = [
-        { code: 'A', name: 'เบิกของส่งสาขา-ผัก' },
-        { code: 'B', name: 'เบิกของส่งสาขา-สด' },
-        { code: 'C', name: 'เบิกของส่งสาขา-แห้ง' },
-        { code: 'D', name: 'ตวงสูตร' }
-      ];
-      
-      const createdIds = [];
-      const skippedCodes = [];
-      
-      // ✅ สร้างเฉพาะงานที่ยังไม่มี
-      for (const task of defaultTasks) {
-        if (existingCodes.includes(task.code)) {
-          console.log(`⏭️  Skipping ${task.code} - ${task.name} (already exists)`);
-          skippedCodes.push(task.code);
-          continue;
-        }
-        
-        console.log(`🆕 Creating ${task.code} - ${task.name}...`);
-        const [result] = await connection.execute(`
-          INSERT INTO work_plans 
-          (production_date, job_code, job_name, job_type, workflow_status, status_id, is_printed, start_time, end_time)
-          VALUES (?, ?, ?, 'default', 'draft', 1, 0, '08:00:00', '09:00:00')
-        `, [formattedDate, task.code, task.name]);
-        
-        createdIds.push(result.insertId);
-        console.log(`✅ Created: ${task.code} - ${task.name} (ID: ${result.insertId}) - Time: 08:00-09:00`);
-      }
-      
-      await connection.commit();
-      
-      // สรุปผลลัพธ์
-      const totalCreated = createdIds.length;
-      const totalSkipped = skippedCodes.length;
-      
-      console.log(`🎉 Completed: Created ${totalCreated} tasks, Skipped ${totalSkipped} tasks`);
-      
-      if (totalCreated === 0 && totalSkipped > 0) {
-        return { 
-          success: true, 
-          message: `All default tasks already exist (${totalSkipped} tasks)`,
-          created: false,
-          createdCount: 0,
-          skippedCount: totalSkipped,
-          skippedCodes: skippedCodes,
-          createdIds: []
-        };
-      }
-      
-      return { 
-        success: true, 
-        message: `Default tasks processed: ${totalCreated} created, ${totalSkipped} skipped`,
-        created: totalCreated > 0,
-        createdCount: totalCreated,
-        skippedCount: totalSkipped,
-        skippedCodes: skippedCodes,
-        ids: createdIds 
-      };
-      
-    } catch (error) {
-      await connection.rollback();
-      console.error('❌ Error creating default tasks:', error);
-      throw new Error(`Error creating default tasks: ${error.message}`);
-    } finally {
-      connection.release();
-    }
-  }
 
   // Create new work plan
   static async create(workPlanData) {
@@ -553,46 +474,31 @@ class WorkPlan {
       `, [formattedDate]);
       
       const isPrinted = syncLog[0].count > 0;
-      // Backend เป็นแหล่งความจริงกำหนดชนิดงาน
-      // ถ้าเป็นงาน A/B/C/D ให้ถือเป็น default เสมอ (กันความผิดพลาดจาก client)
       const defaultCodes = ['A', 'B', 'C', 'D'];
-      let job_type;
-      if (job_code && defaultCodes.includes(String(job_code).toUpperCase())) {
-        job_type = 'default';
-      } else {
-        job_type = isPrinted ? 'special' : 'regular';
-      }
-      
+      const job_type = (job_code && defaultCodes.includes(String(job_code).toUpperCase())) ? 'default' : (isPrinted ? 'special' : 'regular');
       console.log('🖨️ Is printed?', isPrinted, '-> job_type:', job_type);
       
-      // Format times
       const formattedStartTime = this.formatTime(start_time);
       const formattedEndTime = this.formatTime(end_time);
-      
       console.log('🕐 Original start_time:', start_time, '-> Formatted:', formattedStartTime);
       console.log('🕐 Original end_time:', end_time, '-> Formatted:', formattedEndTime);
       
-      // Insert work plan
+      // Insert work plan (ใช้เฉพาะคอลัมน์ที่มีในตาราง work_plans ทุก environment)
       const insertQuery = `
         INSERT INTO work_plans 
-        (production_date, job_code, job_name, job_type, workflow_status, 
-         start_time, end_time, machine_id, production_room_id, notes, 
-         status_id, is_printed, operators)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?)
+        (production_date, job_code, job_name, start_time, end_time, machine_id, production_room_id, notes, status_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
       `;
       
       const [result] = await connection.execute(insertQuery, [
         formattedDate,
         job_code,
         job_name,
-        job_type,
-        workflow_status || 'draft',
         formattedStartTime || null,
         formattedEndTime || null,
         machine_id || null,
         production_room_id || null,
-        notes || null,
-        operators ? JSON.stringify(operators) : '[]'
+        notes || null
       ]);
       
       const workPlanId = result.insertId;
@@ -636,10 +542,20 @@ class WorkPlan {
       
       const { 
         production_date, job_code, job_name, start_time, end_time, notes, operators,
-        workflow_status, machine_id, production_room_id
+        workflow_status, workflow_status_id, machine_id, production_room_id
       } = workPlanData;
+
+      // แปลง workflow_status เป็น status_id สำหรับอัปเดต (1=แบบร่าง, 2=บันทึกเสร็จสิ้น, 3=พิมพ์แล้ว, 4=เสร็จสิ้น)
+      let statusIdToSet = workflow_status_id != null ? Number(workflow_status_id) : null;
+      if (statusIdToSet == null && workflow_status) {
+        const w = String(workflow_status).toLowerCase();
+        if (w === 'completed') statusIdToSet = 2;
+        else if (w === 'printed') statusIdToSet = 3;
+        else if (w === 'finished' || w === 'เสร็จสิ้น') statusIdToSet = 4;
+        else if (w === 'draft') statusIdToSet = 1;
+      }
       
-      console.log('🔄 Updating work plan:', id, 'with workflow_status:', workflow_status);
+      console.log('🔄 Updating work plan:', id, 'with workflow_status:', workflow_status, 'status_id:', statusIdToSet);
       
       // แปลงวันที่ให้เป็นรูปแบบที่ถูกต้อง
       let formattedDate = production_date ? formatDateForDatabase(production_date) : null;
@@ -654,8 +570,24 @@ class WorkPlan {
         formattedEndTime = this.formatTime(end_time);
       }
       
-      // Update work plan
-      const updateQuery = `
+      // ตรวจสอบว่ามีคอลัมน์ status_id หรือไม่ โดยใช้ connection ปัจจุบัน (เลี่ยงเปิด connection ใหม่ที่อาจทำให้เกิด lock)
+      let hasStatusIdColumn = false;
+      try {
+        const [columns] = await connection.execute(`
+          SELECT COLUMN_NAME 
+          FROM INFORMATION_SCHEMA.COLUMNS 
+          WHERE TABLE_SCHEMA = DATABASE() 
+          AND TABLE_NAME = 'work_plans' 
+          AND COLUMN_NAME = 'status_id'
+        `);
+        hasStatusIdColumn = columns.length > 0;
+      } catch (e) {
+        console.warn('⚠️ Unable to check status_id column, skipping status update in main query:', e?.message || e);
+      }
+
+      // Update work plan (ไม่ใช้ workflow_status, operators column เพื่อรองรับ DB ที่ไม่มีคอลัมน์เหล่านี้)
+      // ถ้ามี status_id column และมีค่าที่จะอัปเดต ให้รวม status_id ใน query เดียวกัน
+      let updateQuery = `
         UPDATE work_plans 
         SET 
           production_date = COALESCE(?, production_date),
@@ -665,13 +597,10 @@ class WorkPlan {
           end_time = COALESCE(?, end_time),
           machine_id = COALESCE(?, machine_id),
           production_room_id = COALESCE(?, production_room_id),
-          notes = COALESCE(?, notes),
-          workflow_status = COALESCE(?, workflow_status),
-          operators = COALESCE(?, operators)
-        WHERE id = ?
+          notes = COALESCE(?, notes)
       `;
-      
-      await connection.execute(updateQuery, [
+
+      const updateParams = [
         formattedDate,
         job_code || null,
         job_name || null,
@@ -680,12 +609,50 @@ class WorkPlan {
         machine_id || null,
         production_room_id || null,
         notes || null,
-        workflow_status || null,
-        operators !== undefined && operators !== null ? JSON.stringify(operators) : null,
-        id
-      ]);
+      ];
+
+      if (hasStatusIdColumn && statusIdToSet != null) {
+        updateQuery += `,
+          status_id = ?
+        `;
+        updateParams.push(statusIdToSet);
+      }
+
+      updateQuery += `
+        WHERE id = ?
+      `;
+      updateParams.push(id);
+
+      await connection.execute(updateQuery, updateParams);
       
-      console.log('✅ Updated work plan basic info');
+      console.log('✅ Updated work plan basic info (and status_id if provided)');
+
+      // อัปเดต workflow_status และ is_printed ถ้า DB มีคอลัมน์เหล่านี้
+      if (workflow_status) {
+        try {
+          const w = String(workflow_status).toLowerCase();
+          if (w === 'printed') {
+            await connection.execute(
+              `UPDATE work_plans SET workflow_status = 'printed', is_printed = 1 WHERE id = ?`,
+              [id]
+            );
+          } else if (w === 'completed') {
+            await connection.execute(
+              `UPDATE work_plans SET workflow_status = 'completed', is_printed = 0 WHERE id = ?`,
+              [id]
+            );
+          } else if (w === 'draft') {
+            await connection.execute(
+              `UPDATE work_plans SET workflow_status = 'draft', is_printed = 0 WHERE id = ?`,
+              [id]
+            );
+          }
+        } catch (updateErr) {
+          if (!(updateErr.message && updateErr.message.includes('Unknown column'))) {
+            throw updateErr;
+          }
+        }
+      }
       
       // Update operators (เฉพาะเมื่อส่งมา)
       if (operators !== undefined && operators !== null) {
@@ -882,871 +849,28 @@ class WorkPlan {
     }
   }
 
+  // Delegates — keep controller API stable after extract
+  static async createDefaultTasks(production_date) {
+    return WorkPlanDefaults.createDefaultTasks(production_date);
+  }
+
   static async getPrintDetails(id) {
-    try {
-      const [rows] = await pool.execute(
-        `
-          SELECT 
-            wp.id,
-            DATE_FORMAT(wp.production_date, '%Y-%m-%d') AS production_date,
-            wp.job_code,
-            wp.job_name,
-            TIME_FORMAT(wp.start_time, '%H:%i') AS start_time,
-            TIME_FORMAT(wp.end_time, '%H:%i') AS end_time,
-            wp.notes,
-            m.machine_name,
-            pr.room_name,
-            fg.FG_Name AS fg_name,
-            fg.FG_Code AS fg_code,
-            fg.FG_Unit AS fg_unit,
-            fg.FG_Size AS fg_size,
-            fg.base_unit AS fg_base_unit,
-            fg.conversion_rate AS fg_conversion_rate,
-            fg.conversion_description AS fg_conversion_description
-          FROM work_plans wp
-          LEFT JOIN fg ON fg.FG_Code = wp.job_code
-          LEFT JOIN machines m ON wp.machine_id = m.id
-          LEFT JOIN production_rooms pr ON wp.production_room_id = pr.id
-          WHERE wp.id = ?
-          LIMIT 1
-        `,
-        [id]
-      );
-
-      if (rows.length === 0) {
-        return null;
-      }
-
-      const workPlan = rows[0];
-      
-      // ตรวจสอบและแก้ไข job_code ถ้าจำเป็น
-      // ถ้า job_code เป็นตัวเลข (1, 2, 3...) หรือ 'NEW' หรือไม่มีสูตร ให้ค้นหาใหม่
-      const isNumericJobCode = /^\d+$/.test(workPlan.job_code || '');
-      const isInvalidJobCode = !workPlan.job_code || workPlan.job_code === 'NEW' || isNumericJobCode;
-      
-      let finalJobCode = workPlan.job_code;
-      let shouldUpdateJobCode = false;
-      
-      if (isInvalidJobCode && workPlan.job_name) {
-        // ค้นหา job_code ที่ถูกต้องจาก job_name
-        const foundJobCode = await this.findJobCodeByName(workPlan.job_name);
-        if (foundJobCode) {
-          console.log(`🔍 [Print] Found correct job_code for "${workPlan.job_name}": ${foundJobCode} (was: ${workPlan.job_code})`);
-          finalJobCode = foundJobCode;
-          shouldUpdateJobCode = true;
-        }
-      }
-      
-      // ตรวจสอบว่ามีสูตรหรือไม่ ถ้าไม่มีสูตรและ job_code ไม่ถูกต้อง ให้ค้นหาใหม่
-      if (finalJobCode && !isInvalidJobCode) {
-        const [ingredientCheck] = await pool.execute(
-          `SELECT COUNT(*) as count FROM fg_bom WHERE FG_Code = ?`,
-          [finalJobCode]
-        );
-        if (ingredientCheck[0].count === 0 && workPlan.job_name) {
-          // ไม่มีสูตร ให้ค้นหา job_code ใหม่
-          const foundJobCode = await this.findJobCodeByName(workPlan.job_name);
-          if (foundJobCode) {
-            console.log(`🔍 [Print] No recipe found for job_code "${finalJobCode}", found correct one: ${foundJobCode}`);
-            finalJobCode = foundJobCode;
-            shouldUpdateJobCode = true;
-          }
-        }
-      }
-      
-      // อัพเดท job_code ในฐานข้อมูลถ้าพบว่าไม่ถูกต้อง
-      if (shouldUpdateJobCode && finalJobCode) {
-        try {
-          await pool.execute(
-            `UPDATE work_plans SET job_code = ? WHERE id = ?`,
-            [finalJobCode, workPlan.id]
-          );
-          console.log(`✅ [Print] Updated job_code for work_plan ${workPlan.id} from "${workPlan.job_code}" to "${finalJobCode}"`);
-          // อัพเดท workPlan.job_code เพื่อใช้ในส่วนถัดไป
-          workPlan.job_code = finalJobCode;
-          
-          // ดึงข้อมูล work_plan ใหม่เพื่อให้ได้ข้อมูลที่อัพเดทแล้ว (รวมถึง start_time, end_time)
-          const [updatedRows] = await pool.execute(
-            `
-              SELECT 
-                wp.id,
-                DATE_FORMAT(wp.production_date, '%Y-%m-%d') AS production_date,
-                wp.job_code,
-                wp.job_name,
-                TIME_FORMAT(wp.start_time, '%H:%i') AS start_time,
-                TIME_FORMAT(wp.end_time, '%H:%i') AS end_time,
-                wp.notes,
-                m.machine_name,
-                pr.room_name
-              FROM work_plans wp
-              LEFT JOIN machines m ON wp.machine_id = m.id
-              LEFT JOIN production_rooms pr ON wp.production_room_id = pr.id
-              WHERE wp.id = ?
-              LIMIT 1
-            `,
-            [workPlan.id]
-          );
-          
-          if (updatedRows && updatedRows.length > 0) {
-            // อัพเดทข้อมูล workPlan ด้วยข้อมูลใหม่ (รวมถึง start_time, end_time)
-            workPlan.start_time = updatedRows[0].start_time;
-            workPlan.end_time = updatedRows[0].end_time;
-            workPlan.notes = updatedRows[0].notes;
-            workPlan.machine_name = updatedRows[0].machine_name;
-            workPlan.room_name = updatedRows[0].room_name;
-            console.log(`✅ [Print] Refreshed work_plan data after job_code update`);
-          }
-        } catch (updateError) {
-          console.error('❌ [Print] Error updating job_code:', updateError);
-          // ยังคงใช้ job_code ที่ค้นหาได้แม้ว่าจะอัพเดทไม่สำเร็จ
-        }
-      }
-      
-      // ดึงข้อมูล fg ใหม่ถ้า job_code ถูกแก้ไข
-      let fgData = {
-        fg_name: workPlan.fg_name,
-        fg_code: workPlan.fg_code,
-        fg_unit: workPlan.fg_unit,
-        fg_size: workPlan.fg_size,
-        fg_base_unit: workPlan.fg_base_unit,
-        fg_conversion_rate: workPlan.fg_conversion_rate,
-        fg_conversion_description: workPlan.fg_conversion_description
-      };
-      
-      if (shouldUpdateJobCode && finalJobCode && finalJobCode !== workPlan.job_code) {
-        // ดึงข้อมูล fg ใหม่ด้วย job_code ที่ถูกต้อง
-        const [fgRows] = await pool.execute(
-          `SELECT FG_Name, FG_Code, FG_Unit, FG_Size, base_unit, conversion_rate, conversion_description
-           FROM fg WHERE FG_Code = ? LIMIT 1`,
-          [finalJobCode]
-        );
-        if (fgRows && fgRows.length > 0) {
-          fgData = {
-            fg_name: fgRows[0].FG_Name,
-            fg_code: fgRows[0].FG_Code,
-            fg_unit: fgRows[0].FG_Unit,
-            fg_size: fgRows[0].FG_Size,
-            fg_base_unit: fgRows[0].base_unit,
-            fg_conversion_rate: fgRows[0].conversion_rate,
-            fg_conversion_description: fgRows[0].conversion_description
-          };
-        }
-      }
-
-      // ลำดับงานในวันเดียวกัน (1-based) - กรองงาน A, B, C, D ออกเพราะยังไม่เปิดให้พิมพ์
-      const [orderRows] = await pool.execute(
-        `
-          SELECT id
-          FROM work_plans
-          WHERE DATE(production_date) = ?
-            AND job_code NOT IN ('A','B','C','D')
-          ORDER BY 
-            start_time IS NULL,
-            start_time,
-            id
-        `,
-        [workPlan.production_date]
-      );
-
-      const orderIndex = orderRows.findIndex((row) => row.id === workPlan.id);
-      const runningOrder = orderIndex >= 0 ? orderIndex + 1 : null;
-
-      // รายชื่อผู้ปฏิบัติงาน
-      const [operatorRows] = await pool.execute(
-        `
-          SELECT 
-            COALESCE(u.name, wpo.id_code) AS name,
-            wpo.role
-          FROM work_plan_operators wpo
-          LEFT JOIN users u 
-            ON (wpo.user_id = u.id)
-            OR (wpo.id_code IS NOT NULL AND wpo.id_code = u.id_code)
-          WHERE wpo.work_plan_id = ?
-          ORDER BY wpo.id ASC
-        `,
-        [workPlan.id]
-      );
-
-      const operatorNames = operatorRows
-        .map((op) => op.name)
-        .filter(Boolean);
-
-      const operators = operatorRows
-        .map((op) => ({
-          name: op.name || '',
-          role: op.role || 'operator'
-        }))
-        .filter((op) => op.name);
-
-      // รายการวัตถุดิบตามสูตร (ใช้ finalJobCode ที่อาจถูกแก้ไขแล้ว)
-      let ingredients = [];
-      if (finalJobCode) {
-        const [ingredientRows] = await pool.execute(
-          `
-            SELECT 
-              fb.id,
-              fb.Raw_Code AS material_code,
-              fb.Raw_Qty AS quantity,
-              fb.Raw_Unit AS unit,
-              m.Mat_Name AS material_name
-            FROM fg_bom fb
-            LEFT JOIN material m ON m.Mat_Id = fb.Raw_Code
-            WHERE fb.FG_Code = ?
-            ORDER BY fb.id ASC
-          `,
-          [finalJobCode]
-        );
-
-        ingredients = ingredientRows.map((item, index) => ({
-          rowNumber: index + 1,
-          materialCode: item.material_code || '',
-          materialName: item.material_name || '',
-          quantity: item.quantity ?? null,
-          unit: item.unit || ''
-        }));
-      }
-
-      return {
-        id: workPlan.id,
-        jobCode: finalJobCode || workPlan.job_code,
-        jobName: workPlan.job_name,
-        productionDate: workPlan.production_date,
-        order: runningOrder,
-        planTime: {
-          start: workPlan.start_time || null,
-          end: workPlan.end_time || null
-        },
-        operatorsFull: operatorNames,
-        notes: workPlan.notes || '',
-        machineName: workPlan.machine_name || null,
-        roomName: workPlan.room_name || null,
-        fgSummary: {
-          code: fgData.fg_code || null,
-          name: fgData.fg_name || null,
-          unit: fgData.fg_unit || null,
-          size: fgData.fg_size || null,
-          baseUnit: fgData.fg_base_unit || null,
-          conversionRate: fgData.fg_conversion_rate || null,
-          conversionDescription: fgData.fg_conversion_description || null
-        },
-        operators,
-        ingredients
-      };
-    } catch (error) {
-      throw new Error(`Error fetching print data: ${error.message}`);
-    }
+    return WorkPlanPrint.getPrintDetails(id);
   }
 
   static async getPrintDetailsByDate(production_date) {
-    try {
-      const formattedDate = formatDateForDatabase(production_date);
-
-      if (!formattedDate) {
-        throw new Error('Invalid production date');
-      }
-
-      const [workPlanRows] = await pool.execute(
-        `
-          SELECT id
-          FROM work_plans
-          WHERE DATE(production_date) = ?
-            AND job_code NOT IN ('A','B','C','D')
-          ORDER BY 
-            start_time IS NULL,
-            start_time,
-            id
-        `,
-        [formattedDate]
-      );
-
-      if (workPlanRows.length === 0) {
-        return [];
-      }
-
-      const details = await Promise.all(
-        workPlanRows.map((row) => this.getPrintDetails(row.id))
-      );
-
-      // ใช้ลำดับที่คำนวณจาก getPrintDetails โดยตรง (ไม่ต้อง override ด้วย index + 1)
-      // เพราะ getPrintDetails คำนวณลำดับจาก orderRows ที่กรอง A, B, C, D แล้ว
-      return details.filter(Boolean);
-    } catch (error) {
-      throw new Error(`Error fetching print data by date: ${error.message}`);
-    }
+    return WorkPlanPrint.getPrintDetailsByDate(production_date);
   }
 
   static async getPrintDetailsByJobCode(jobCode, options = {}) {
-    try {
-      if (!jobCode || !jobCode.trim()) {
-        throw new Error('jobCode is required');
-      }
-
-      const finalJobCode = jobCode.trim();
-      let jobName = options.jobName || null;
-
-      // ดึงข้อมูล FG
-      let fgData = {
-        fg_name: null,
-        fg_code: finalJobCode,
-        fg_unit: null,
-        fg_size: null,
-        fg_base_unit: null,
-        fg_conversion_rate: null,
-        fg_conversion_description: null
-      };
-
-      const [fgRows] = await pool.execute(
-        `SELECT FG_Name, FG_Code, FG_Unit, FG_Size, base_unit, conversion_rate, conversion_description
-         FROM fg WHERE FG_Code = ? LIMIT 1`,
-        [finalJobCode]
-      );
-
-      if (fgRows && fgRows.length > 0) {
-        fgData = {
-          fg_name: fgRows[0].FG_Name,
-          fg_code: fgRows[0].FG_Code,
-          fg_unit: fgRows[0].FG_Unit,
-          fg_size: fgRows[0].FG_Size,
-          fg_base_unit: fgRows[0].base_unit,
-          fg_conversion_rate: fgRows[0].conversion_rate,
-          fg_conversion_description: fgRows[0].conversion_description
-        };
-        jobName = jobName || fgRows[0].FG_Name;
-      } else {
-        // ลองดึงข้อมูลจาก process_steps ถ้าไม่เจอใน fg
-        const [processRows] = await pool.execute(
-          `SELECT job_name FROM process_steps WHERE job_code = ? LIMIT 1`,
-          [finalJobCode]
-        );
-        if (processRows && processRows.length > 0) {
-          jobName = jobName || processRows[0].job_name;
-        }
-      }
-
-      // ดึงสูตรวัตถุดิบจาก fg_bom
-      const [ingredientRows] = await pool.execute(
-        `
-          SELECT 
-            fb.id,
-            fb.Raw_Code AS material_code,
-            fb.Raw_Qty AS quantity,
-            fb.Raw_Unit AS unit,
-            m.Mat_Name AS material_name
-          FROM fg_bom fb
-          LEFT JOIN material m ON m.Mat_Id = fb.Raw_Code
-          WHERE fb.FG_Code = ?
-          ORDER BY fb.id ASC
-        `,
-        [finalJobCode]
-      );
-
-      const ingredients = ingredientRows.map((item, index) => ({
-        rowNumber: index + 1,
-        materialCode: item.material_code || '',
-        materialName: item.material_name || '',
-        quantity: item.quantity ?? null,
-        unit: item.unit || ''
-      }));
-
-      return {
-        id: null,
-        jobCode: finalJobCode,
-        jobName: jobName || finalJobCode,
-        productionDate: null,
-        order: null,
-        planTime: {
-          start: null,
-          end: null
-        },
-        operatorsFull: [],
-        notes: '',
-        machineName: null,
-        roomName: null,
-        fgSummary: {
-          code: fgData.fg_code || finalJobCode,
-          name: fgData.fg_name || jobName || null,
-          unit: fgData.fg_unit || null,
-          size: fgData.fg_size || null,
-          baseUnit: fgData.fg_base_unit || null,
-          conversionRate: fgData.fg_conversion_rate || null,
-          conversionDescription: fgData.fg_conversion_description || null
-        },
-        operators: [],
-        ingredients
-      };
-    } catch (error) {
-      throw new Error(`Error fetching print data by job code: ${error.message}`);
-    }
+    return WorkPlanPrint.getPrintDetailsByJobCode(jobCode, options);
   }
 
-  // พิมพ์ใบงานผลิต
   static async printWorkPlan(production_date) {
-    const connection = await pool.getConnection();
-    try {
-      await connection.beginTransaction();
-      
-      const formattedDate = formatDateForDatabase(production_date);
-      
-      console.log('🖨️ Printing work plan for:', formattedDate);
-      
-      // เช็คว่ามีงาน draft อยู่ไหม (regular เท่านั้น ไม่รวม default)
-      const [draftCheck] = await connection.execute(`
-        SELECT COUNT(*) as count
-        FROM work_plans
-        WHERE DATE(production_date) = ? 
-          AND job_type = 'regular' 
-          AND workflow_status = 'draft'
-      `, [formattedDate]);
-      
-      if (draftCheck[0].count > 0) {
-        console.log('⚠️ Found', draftCheck[0].count, 'draft tasks');
-        await connection.rollback();
-        return {
-          success: false,
-          message: 'กรุณาบันทึกงานให้เสร็จสิ้นทุกงานก่อนพิมพ์',
-          draftCount: draftCheck[0].count
-        };
-      }
-      
-      // อัพเดทสถานะเป็น "พิมพ์แล้ว"
-      const [updateResult] = await connection.execute(`
-        UPDATE work_plans 
-        SET 
-          workflow_status = 'printed',
-          is_printed = 1
-        WHERE DATE(production_date) = ? 
-          AND workflow_status IN ('draft', 'completed')
-      `, [formattedDate]);
-      
-      console.log('✅ Updated', updateResult.affectedRows, 'work plans to printed');
-      
-      // บันทึก log การพิมพ์
-      await connection.execute(`
-        INSERT INTO workplan_sync_log (production_date, synced_at)
-        VALUES (?, NOW())
-      `, [formattedDate]);
-      
-      console.log('📝 Logged print action');
-      
-      await connection.commit();
-      
-      console.log('🎉 Print successful!');
-      
-      return { 
-        success: true, 
-        message: 'พิมพ์ใบงานสำเร็จ',
-        updated: updateResult.affectedRows
-      };
-      
-    } catch (error) {
-      await connection.rollback();
-      console.error('❌ Error printing work plan:', error);
-      throw new Error(`Error printing work plan: ${error.message}`);
-    } finally {
-      connection.release();
-    }
+    return WorkPlanPrint.printWorkPlan(production_date);
   }
 }
 
-// เพิ่ม model สำหรับ work_plan_drafts
-class DraftWorkPlan {
-  static async getAll(date = null) {
-    let query = `
-      SELECT 
-        wd.*,
-        DATE_FORMAT(wd.production_date, "%Y-%m-%d") as production_date,
-        pr.room_name as production_room_name,
-        m.machine_name as machine_name
-      FROM work_plan_drafts wd
-      LEFT JOIN production_rooms pr ON wd.production_room_id = pr.id
-      LEFT JOIN machines m ON wd.machine_id = m.id
-    `;
-    
-    const params = [];
-    
-    // ✅ กรองตามวันที่ถ้ามี
-    if (date) {
-      query += ' WHERE DATE(wd.production_date) = ?';
-      params.push(date);
-    }
-    
-    query += ' ORDER BY wd.production_date DESC, wd.id DESC';
-    
-    const [rows] = await pool.execute(query, params);
-    return rows;
-  }
-  static async getById(id) {
-    const [rows] = await pool.execute(`
-      SELECT 
-        wd.*,
-        pr.room_name as production_room_name,
-        m.machine_name as machine_name
-      FROM work_plan_drafts wd
-      LEFT JOIN production_rooms pr ON wd.production_room_id = pr.id
-      LEFT JOIN machines m ON wd.machine_id = m.id
-      WHERE wd.id = ?
-    `, [id]);
-    return rows[0] || null;
-  }
-  static async create(data) {
-    const { production_date, job_code, job_name, start_time, end_time, machine_id, production_room_id, notes, workflow_status_id, operators } = data;
-    // เช็คซ้ำก่อน insert
-    const [existing] = await pool.execute(
-      'SELECT * FROM work_plan_drafts WHERE production_date = ? AND job_code = ? AND job_name = ? LIMIT 1',
-      [production_date, job_code, job_name]
-    );
-    if (existing.length > 0) {
-      return existing[0]; // ถ้ามีอยู่แล้ว return draft เดิม
-    }
-    const [result] = await pool.execute(
-      'INSERT INTO work_plan_drafts (production_date, job_code, job_name, start_time, end_time, machine_id, production_room_id, notes, workflow_status_id, operators) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [production_date, job_code, job_name, start_time, end_time, machine_id, production_room_id, notes || '', workflow_status_id || 1, JSON.stringify(operators || [])]
-    );
-    return { id: result.insertId, ...data };
-  }
-  static async update(id, data) {
-    const { production_date, job_code, job_name, start_time, end_time, machine_id, production_room_id, notes, workflow_status_id, operators } = data;
-    
-    // ตรวจสอบและจัดการ undefined values
-    const safeProductionDate = production_date || null;
-    const safeJobCode = job_code || null;
-    const safeJobName = job_name || null;
-    const safeStartTime = start_time || null;
-    const safeEndTime = end_time || null;
-    const safeMachineId = machine_id || null;
-    const safeProductionRoomId = production_room_id || null;
-    const safeNotes = notes || '';
-    const safeWorkflowStatusId = workflow_status_id || 1;
-    const safeOperators = operators || [];
-    
-    await pool.execute(
-      'UPDATE work_plan_drafts SET production_date=?, job_code=?, job_name=?, start_time=?, end_time=?, machine_id=?, production_room_id=?, notes=?, workflow_status_id=?, operators=? WHERE id=?',
-      [safeProductionDate, safeJobCode, safeJobName, safeStartTime, safeEndTime, safeMachineId, safeProductionRoomId, safeNotes, safeWorkflowStatusId, JSON.stringify(safeOperators), id]
-    );
-    return { id, ...data };
-  }
-  static async delete(id) {
-    await pool.execute('DELETE FROM work_plan_drafts WHERE id = ?', [id]);
-    return true;
-  }
-  static async syncDraftsToPlans(targetDate = null) {
-    const connection = await pool.getConnection();
-    try {
-      await connection.beginTransaction();
-      
-      let query = 'SELECT * FROM work_plan_drafts WHERE workflow_status_id = 2 AND job_code NOT IN (\'A\', \'B\', \'C\', \'D\')';
-      let params = [];
-      
-      // ถ้ามีการระบุวันที่ ให้ sync เฉพาะวันที่นั้น
-      if (targetDate) {
-        // แปลงวันที่ให้เป็นรูปแบบที่ถูกต้อง
-        const formattedDate = formatDateForDatabase(targetDate);
-        query += ' AND DATE(production_date) = ?';
-        params.push(formattedDate);
-        console.log('🔄 [DEBUG] Formatted target date:', formattedDate);
-      }
-      
-      query += ' ORDER BY production_date ASC, start_time ASC';
-      
-      console.log('🔄 Sync query:', query);
-      console.log('🔄 Sync params:', params);
-      console.log('🔄 [PROTECTION] กรองออกงาน A, B, C, D จาก sync');
-      
-      // ดึง drafts ที่มีสถานะ "บันทึกเสร็จสิ้น" (workflow_status_id = 2) และไม่ใช่ A, B, C, D
-      const [drafts] = await connection.execute(query, params);
-      
-      console.log('🔄 Found drafts to sync:', drafts.length);
-      drafts.forEach((draft, index) => {
-        console.log(`🔄 Draft ${index + 1}:`, {
-          id: draft.id,
-          job_name: draft.job_name,
-          production_date: draft.production_date,
-          workflow_status_id: draft.workflow_status_id
-        });
-      });
-      
-      let syncedCount = 0;
-      const syncedDrafts = [];
-      
-      // 1. บันทึก log การ sync
-      let syncLogId = null;
-      // 2. ดึงเวลาซิงค์ล่าสุดของวันนั้น (ก่อน insert log ใหม่)
-      let lastSyncTime = null;
-      if (targetDate) {
-        const formattedDate = formatDateForDatabase(targetDate);
-        const [syncRows] = await connection.execute(
-          'SELECT synced_at FROM workplan_sync_log WHERE DATE(production_date) = ? ORDER BY synced_at DESC LIMIT 1',
-          [formattedDate]
-        );
-        if (syncRows.length > 0) {
-          lastSyncTime = new Date(syncRows[0].synced_at);
-          console.log(`[SYNC] Last sync time for ${formattedDate}:`, lastSyncTime);
-        } else {
-          console.log(`[SYNC] No previous sync found for ${formattedDate}`);
-        }
-      }
-      
-      for (const draft of drafts) {
-        try {
-          // แปลง operators จาก JSON string เป็น array (robust)
-          let operators = [];
-          try {
-            if (typeof draft.operators === 'string' && (draft.operators.trim().startsWith('[') || draft.operators.trim().startsWith('{'))) {
-              operators = JSON.parse(draft.operators);
-            } else if (Array.isArray(draft.operators)) {
-              operators = draft.operators;
-            } else {
-              operators = [];
-            }
-          } catch (e) {
-            operators = [];
-          }
-          
-          // ตรวจสอบว่ามีงานในวันนั้นอยู่แล้วหรือไม่ (เฉพาะที่ไม่ใช่ A, B, C, D)
-          const defaultCodes = ['A', 'B', 'C', 'D'];
-          const isDefaultJob = defaultCodes.includes(draft.job_code);
-          // เช็คว่ามี A, B, C, D ใน workplans จริงของวันนั้นหรือยัง
-          const [existingDefault] = await connection.execute(
-            'SELECT COUNT(*) as count FROM work_plans WHERE DATE(production_date) = DATE(?) AND job_code = ?',
-            [draft.production_date, draft.job_code]
-          );
-          const [existingPlans] = await connection.execute(
-            'SELECT COUNT(*) as count FROM work_plans WHERE DATE(production_date) = DATE(?) AND job_code NOT IN (\'A\', \'B\', \'C\', \'D\')',
-            [draft.production_date]
-          );
-          const isSpecialJob = existingPlans[0].count > 0 && !isDefaultJob;
-          // 3. เช็คว่า draft นี้ถูกสร้างหลัง sync หรือไม่ (is_special)
-          let isSpecialDraft = false;
-          if (lastSyncTime && draft.created_at) {
-            const draftCreatedAt = new Date(draft.created_at);
-            isSpecialDraft = draftCreatedAt > lastSyncTime;
-            console.log(`[SYNC] Draft ${draft.job_code} ${draft.job_name}:`, {
-              draftCreatedAt: draftCreatedAt,
-              lastSyncTime: lastSyncTime,
-              isSpecialDraft: isSpecialDraft
-            });
-          } else {
-            console.log(`[SYNC] Draft ${draft.job_code} ${draft.job_name}: No lastSyncTime or created_at, isSpecialDraft = false`);
-          }
-          // 4. ไม่เติม prefix งานพิเศษใน job_code/job_name
-          let jobCode = draft.job_code;
-          let jobName = draft.job_name;
-          // log debug
-          console.log(`[SYNC] draft: ${draft.job_code} ${draft.job_name}, isSpecialDraft: ${isSpecialDraft}`);
-          // สร้าง work plan ใหม่
-          let insertQuery, insertParams;
-          // ตรวจสอบว่ามี status_id และ is_special column หรือไม่
-          const [columns] = await connection.execute(`
-            SELECT COLUMN_NAME 
-            FROM INFORMATION_SCHEMA.COLUMNS 
-            WHERE TABLE_SCHEMA = DATABASE() 
-            AND TABLE_NAME = 'work_plans' 
-            AND COLUMN_NAME IN ('status_id', 'is_special', 'machine_id', 'production_room_id')
-          `);
-          const hasStatusColumn = columns.some(col => col.COLUMN_NAME === 'status_id');
-          const hasIsSpecialColumn = columns.some(col => col.COLUMN_NAME === 'is_special');
-          const hasMachineIdColumn = columns.some(col => col.COLUMN_NAME === 'machine_id');
-          const hasProductionRoomIdColumn = columns.some(col => col.COLUMN_NAME === 'production_room_id');
-          console.log('🔄 Has status_id column:', hasStatusColumn, 'Has is_special column:', hasIsSpecialColumn);
-          console.log('🔄 Has machine_id column:', hasMachineIdColumn, 'Has production_room_id column:', hasProductionRoomIdColumn);
-          // ตรวจสอบว่ามี operators column หรือไม่
-          const [operatorsColumns] = await connection.execute(`
-            SELECT COLUMN_NAME 
-            FROM INFORMATION_SCHEMA.COLUMNS 
-            WHERE TABLE_SCHEMA = DATABASE() 
-            AND TABLE_NAME = 'work_plans' 
-            AND COLUMN_NAME = 'operators'
-          `);
-          const hasOperatorsColumn = operatorsColumns.length > 0;
-          console.log('🔄 Has operators column:', hasOperatorsColumn);
-          
-                    if (hasStatusColumn && hasIsSpecialColumn && hasOperatorsColumn && hasMachineIdColumn && hasProductionRoomIdColumn) {
-            insertQuery = 'INSERT INTO work_plans (production_date, job_code, job_name, start_time, end_time, status_id, is_special, notes, operators, machine_id, production_room_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
-            insertParams = [
-              draft.production_date,
-              jobCode, 
-              jobName, 
-              draft.start_time, 
-              draft.end_time,
-              isSpecialDraft ? 10 : 3, // 10 = งานพิเศษ, 3 = พิมพ์แล้ว (สำหรับงานที่บันทึกเสร็จสิ้นแล้ว)
-              isSpecialDraft ? 1 : 0,   // is_special
-              draft.notes || null,      // notes
-              JSON.stringify(operators), // operators
-              draft.machine_id || null,  // machine_id
-              draft.production_room_id || null // production_room_id
-            ];
-          } else if (hasStatusColumn && hasOperatorsColumn && hasMachineIdColumn && hasProductionRoomIdColumn) {
-            insertQuery = 'INSERT INTO work_plans (production_date, job_code, job_name, start_time, end_time, status_id, notes, operators, machine_id, production_room_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
-            insertParams = [
-              draft.production_date, 
-              jobCode, 
-              jobName, 
-              draft.start_time, 
-              draft.end_time,
-              isSpecialDraft ? 10 : 3, // 10 = งานพิเศษ, 3 = พิมพ์แล้ว (สำหรับงานที่บันทึกเสร็จสิ้นแล้ว)
-              draft.notes || null,     // notes
-              JSON.stringify(operators), // operators
-              draft.machine_id || null,  // machine_id
-              draft.production_room_id || null // production_room_id
-            ];
-          } else if (hasStatusColumn && hasIsSpecialColumn && hasMachineIdColumn && hasProductionRoomIdColumn) {
-            insertQuery = 'INSERT INTO work_plans (production_date, job_code, job_name, start_time, end_time, status_id, is_special, notes, machine_id, production_room_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
-            insertParams = [
-              draft.production_date, 
-              jobCode, 
-              jobName, 
-              draft.start_time, 
-              draft.end_time,
-              isSpecialDraft ? 10 : 3, // 10 = งานพิเศษ, 3 = พิมพ์แล้ว (สำหรับงานที่บันทึกเสร็จสิ้นแล้ว)
-              isSpecialDraft ? 1 : 0,   // is_special
-              draft.notes || null,      // notes
-              draft.machine_id || null,  // machine_id
-              draft.production_room_id || null // production_room_id
-            ];
-          } else if (hasStatusColumn && hasMachineIdColumn && hasProductionRoomIdColumn) {
-            insertQuery = 'INSERT INTO work_plans (production_date, job_code, job_name, start_time, end_time, status_id, notes, machine_id, production_room_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
-            insertParams = [
-              draft.production_date, 
-              jobCode, 
-              jobName, 
-              draft.start_time, 
-              draft.end_time,
-              isSpecialDraft ? 10 : 3, // 10 = งานพิเศษ, 3 = พิมพ์แล้ว (สำหรับงานที่บันทึกเสร็จสิ้นแล้ว)
-              draft.notes || null,     // notes
-              draft.machine_id || null,  // machine_id
-              draft.production_room_id || null // production_room_id
-            ];
-          } else if (hasMachineIdColumn && hasProductionRoomIdColumn) {
-            insertQuery = 'INSERT INTO work_plans (production_date, job_code, job_name, start_time, end_time, notes, machine_id, production_room_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)';
-            insertParams = [
-              draft.production_date, 
-              jobCode, 
-              jobName, 
-              draft.start_time, 
-              draft.end_time,
-              draft.notes || null,     // notes
-              draft.machine_id || null,  // machine_id
-              draft.production_room_id || null // production_room_id
-            ];
-          } else if (hasStatusColumn && hasIsSpecialColumn && hasOperatorsColumn) {
-            insertQuery = 'INSERT INTO work_plans (production_date, job_code, job_name, start_time, end_time, status_id, is_special, notes, operators) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
-            insertParams = [
-              draft.production_date,
-              jobCode, 
-              jobName, 
-              draft.start_time, 
-              draft.end_time,
-              isSpecialDraft ? 10 : 3, // 10 = งานพิเศษ, 3 = พิมพ์แล้ว (สำหรับงานที่บันทึกเสร็จสิ้นแล้ว)
-              isSpecialDraft ? 1 : 0,   // is_special
-              draft.notes || null,      // notes
-              JSON.stringify(operators) // operators
-            ];
-          } else if (hasStatusColumn && hasOperatorsColumn) {
-            insertQuery = 'INSERT INTO work_plans (production_date, job_code, job_name, start_time, end_time, status_id, notes, operators) VALUES (?, ?, ?, ?, ?, ?, ?, ?)';
-            insertParams = [
-              draft.production_date, 
-              jobCode, 
-              jobName, 
-              draft.start_time, 
-              draft.end_time,
-              isSpecialDraft ? 10 : 3, // 10 = งานพิเศษ, 3 = พิมพ์แล้ว (สำหรับงานที่บันทึกเสร็จสิ้นแล้ว)
-              draft.notes || null,     // notes
-              JSON.stringify(operators) // operators
-            ];
-          } else if (hasStatusColumn && hasIsSpecialColumn) {
-            insertQuery = 'INSERT INTO work_plans (production_date, job_code, job_name, start_time, end_time, status_id, is_special, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)';
-            insertParams = [
-              draft.production_date, 
-              jobCode, 
-              jobName, 
-              draft.start_time, 
-              draft.end_time,
-              isSpecialDraft ? 10 : 3, // 10 = งานพิเศษ, 3 = พิมพ์แล้ว (สำหรับงานที่บันทึกเสร็จสิ้นแล้ว)
-              isSpecialDraft ? 1 : 0,   // is_special
-              draft.notes || null       // notes
-            ];
-          } else if (hasStatusColumn) {
-            insertQuery = 'INSERT INTO work_plans (production_date, job_code, job_name, start_time, end_time, status_id, notes) VALUES (?, ?, ?, ?, ?, ?, ?)';
-            insertParams = [
-              draft.production_date, 
-              jobCode, 
-              jobName, 
-              draft.start_time, 
-              draft.end_time,
-              isSpecialDraft ? 10 : 3, // 10 = งานพิเศษ, 3 = พิมพ์แล้ว (สำหรับงานที่บันทึกเสร็จสิ้นแล้ว)
-              draft.notes || null      // notes
-            ];
-          } else {
-            insertQuery = 'INSERT INTO work_plans (production_date, job_code, job_name, start_time, end_time, notes) VALUES (?, ?, ?, ?, ?, ?)';
-            insertParams = [
-              draft.production_date, 
-              jobCode, 
-              jobName, 
-              draft.start_time, 
-              draft.end_time,
-              draft.notes || null      // notes
-            ];
-          }
-          console.log('🔄 Insert query:', insertQuery);
-          console.log('🔄 Insert params:', insertParams);
-          console.log('🔄 Machine ID from draft:', draft.machine_id, 'Production Room ID from draft:', draft.production_room_id);
-          const [result] = await connection.execute(insertQuery, insertParams);
-          const workPlanId = result.insertId;
-          // เพิ่ม operators
-          for (const operator of operators) {
-            await connection.execute(
-              'INSERT INTO work_plan_operators (work_plan_id, user_id, id_code) VALUES (?, ?, ?)',
-              [workPlanId, operator.user_id || null, operator.id_code || null]
-            );
-          }
-          // ลบ draft หลังจาก sync สำเร็จ
-          console.log('🔄 Deleting draft ID:', draft.id);
-          await connection.execute('DELETE FROM work_plan_drafts WHERE id = ?', [draft.id]);
-          syncedCount++;
-          syncedDrafts.push({ draftId: draft.id, workPlanId });
-          console.log('🔄 Successfully synced draft:', {
-            draft_id: draft.id,
-            work_plan_id: workPlanId,
-            job_name: jobName
-          });
-          
-        } catch (err) {
-          console.error(`Error syncing draft ${draft.id}:`, err);
-          // ไม่ rollback ทั้งหมด แต่ข้าม draft ที่มีปัญหา
-          continue;
-        }
-      }
-      
-      // 3. บันทึก log การ sync (ย้ายมาหลัง loop)
-      if (targetDate) {
-        const formattedDate = formatDateForDatabase(targetDate);
-        const [syncLogResult] = await connection.execute(
-          'INSERT INTO workplan_sync_log (production_date) VALUES (?)',
-          [formattedDate]
-        );
-        syncLogId = syncLogResult.insertId;
-        console.log(`[SYNC] Inserted sync log with ID: ${syncLogId}`);
-      }
-      
-      console.log('🔄 Committing transaction...');
-      await connection.commit();
-      
-      console.log('🔄 Sync completed. Total synced:', syncedCount);
-      
-      return {
-        success: true,
-        synced: syncedCount,
-        drafts: syncedDrafts,
-        message: `Sync สำเร็จ ${syncedCount} รายการ`
-      };
-      
-    } catch (error) {
-      await connection.rollback();
-      throw new Error(`Error syncing drafts to plans: ${error.message}`);
-    } finally {
-      connection.release();
-    }
-  }
-}
+const DraftWorkPlan = require('./DraftWorkPlan');
 
-module.exports = { WorkPlan, DraftWorkPlan }; 
+module.exports = { WorkPlan, DraftWorkPlan };

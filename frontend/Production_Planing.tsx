@@ -17,8 +17,6 @@ import {
   RefreshCw,
   Search,
   User as UserIcon,
-  XCircle,
-  BarChart3,
   ChevronDown as ChevronDownIcon,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -26,7 +24,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import AutosizeTextarea from "@/components/AutosizeTextarea"
 import dynamic from "next/dynamic"
 const RichNoteEditor = dynamic(() => import("@/components/RichNoteEditor"), { ssr: false })
@@ -42,13 +39,25 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { TableSkeletonLoader, CardSkeletonLoader } from "@/components/SkeletonLoader";
 import { WeeklyCalendar } from "@/components/WeeklyCalendar";
 import { TimeTablePopup } from "@/components/TimeTablePopup";
-import { TIMETABLE_CONSTANTS } from "@/components/timetable/constants";
+import { PlannerConfirmDialog } from "@/components/planner/PlannerConfirmDialog";
+import { PlannerAlertDialog } from "@/components/planner/PlannerAlertDialog";
+import { AutoFillJobDialog } from "@/components/planner/AutoFillJobDialog";
+import { ProductionDetailsModal } from "@/components/planner/ProductionDetailsModal";
+import { EditDraftModal } from "@/components/planner/EditDraftModal";
+import { AddJobFormCard } from "@/components/planner/AddJobFormCard";
+import { StaffingDashboardCard } from "@/components/planner/StaffingDashboardCard";
+import { calculateDailySummary } from "@/lib/dailySummary";
+
+import { useDebounce } from "@/hooks/useDebounce";
+import { generateTimeOptions } from "@/lib/timeOptions";
+import { STAFF_IMAGES } from "@/lib/staffImages";
+import { getSelectedDayProduction as selectDayProduction, normalizeTimeForForm, sortJobsForDisplay, getSortedDailyProduction } from "@/lib/productionDay";
 import { ProductionTask } from "@/lib/types/weekly-calendar";
 import { arrayMove } from "@dnd-kit/sortable";
 import { createSafeDate, formatDateForDisplay, formatDateForAPI, formatDateThaiShort } from "@/lib/dateUtils";
 import { config, debugLog, debugError, getApiUrl as getApiUrlFromConfig } from "@/lib/config";
 import { api, handleApiError, createAbortController } from "@/lib/api";
-import { getOperatorsArray, getOperatorsString, isDraftItem, isSpecialItem } from "@/lib/utils";
+import { getOperatorsArray, getOperatorsString, isDraftItem } from "@/lib/utils";
 import { clientCache, CACHE_KEYS, CACHE_TTL } from "@/lib/cache";
 import type { 
   User, 
@@ -61,24 +70,10 @@ import type {
 } from "@/types/production";
 import Link from "next/link";
 
-function useDebounce<T>(value: T, delay: number): T {
-  const [debouncedValue, setDebouncedValue] = useState(value);
-
-  useEffect(() => {
-    const handler = setTimeout(() => setDebouncedValue(value), delay);
-    return () => clearTimeout(handler);
-  }, [value, delay]);
-
-  return debouncedValue;
-}
-
 const notoSansThai = Noto_Sans_Thai({
   subsets: ["thai", "latin"],
   weight: ["300", "400", "500", "600", "700"],
 })
-
-// ===== ฟังก์ชันช่วยเช็ค prefix เลขงาน (ต้องอยู่บนสุดของไฟล์) =====
-const hasJobNumberPrefix = (name: string) => /^([A-D]|\d+)\s/.test(name);
 
 export default function MedicalAppointmentDashboard() {
   // ===== ALL STATE DECLARATIONS FIRST (ป้องกัน hooks order error) =====
@@ -118,6 +113,7 @@ export default function MedicalAppointmentDashboard() {
   const hasInitializedDateRef = useRef(false); // flag เพื่อป้องกันการ set selectedDate ซ้ำ
   const [showWorkerDetails, setShowWorkerDetails] = useState(true); // เพิ่ม state สำหรับเปิด/ปิดรายละเอียด (default เปิด)
   const [showTimeTable, setShowTimeTable] = useState(false); // เพิ่ม state สำหรับเปิด/ปิด Time Table Popup (default ปิด)
+  const [showDashboard, setShowDashboard] = useState(true); // เพิ่ม state สำหรับแสดง/ซ่อน Dashboard การลงคนลงเวลา (default แสดง)
   const [syncModeEnabled, setSyncModeEnabled] = useState(false); // เพิ่ม state สำหรับ sync mode
   const router = useRouter();
   
@@ -172,20 +168,6 @@ export default function MedicalAppointmentDashboard() {
     }, 0);
   }, []);
 
-  // ฟังก์ชันสร้าง array ของเวลา 08:00-18:00 ทีละ 15 นาที
-  const generateTimeOptions = (start = "08:00", end = "18:00", step = 15) => {
-    const pad = (n: number) => n.toString().padStart(2, "0");
-    const result = [];
-    let [h, m] = start.split(":").map(Number);
-    const [endH, endM] = end.split(":").map(Number);
-    while (h < endH || (h === endH && m <= endM)) {
-      result.push(`${pad(h)}:${pad(m)}`);
-      m += step;
-      if (m >= 60) { h++; m = m - 60; }
-    }
-    debugLog('⏰ Generated time options:', result);
-    return result;
-  };
   const timeOptions = generateTimeOptions();
 
   // state สำหรับข้อมูลแผนผลิตจริง
@@ -350,10 +332,27 @@ export default function MedicalAppointmentDashboard() {
   // Helper function for API URL - use frontend proxy (relative path)
   const getApiUrl = (endpoint: string) => {
     if (!endpoint) return '/';
-    // Ensure we always call Next.js API routes (frontend proxy)
-    // so the same code works across environments without CORS/env issues
     const clean = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
     return clean;
+  };
+
+  // เวลารอสูงสุดสำหรับการบันทึก (มิลลิวินาที) - ป้องกันค้าง
+  const SAVE_REQUEST_TIMEOUT_MS = 25000;
+  const fetchWithTimeout = async (url: string, options: RequestInit & { timeout?: number } = {}) => {
+    const { timeout = SAVE_REQUEST_TIMEOUT_MS, ...fetchOptions } = options;
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    try {
+      const res = await fetch(url, { ...fetchOptions, signal: controller.signal });
+      clearTimeout(id);
+      return res;
+    } catch (e) {
+      clearTimeout(id);
+      if (e instanceof Error && e.name === 'AbortError') {
+        throw new Error('การเชื่อมต่อใช้เวลานาน กรุณาลองใหม่');
+      }
+      throw e;
+    }
   };
 
   // Fetch dropdown data on mount
@@ -654,100 +653,17 @@ export default function MedicalAppointmentDashboard() {
 
   // เพิ่มฟังก์ชันสำหรับสีของแต่ละวัน
 
-  // Staff image mapping
-  const staffImages: { [key: string]: string } = {
-    // ชื่อไทย
-    จรัญ: "/images/staff/จรัญ.jpeg",
-    แมน: "/images/staff/แมน.jpg",
-    แจ็ค: "/images/staff/แจ็ค.jpg",
-    ป้าน้อย: "/images/staff/ป้าน้อย.jpg",
-    พี่ตุ่น: "/images/staff/พี่ตุ่น.jpg",
-    เอ: "/images/staff/เอ.jpg",
-    โอเล่: "/images/staff/โอเล่.jpg",
-    พี่ภา: "/images/staff/พี่ภา.jpg",
-    อาร์ม: "/images/staff/อาร์ม.jpg",
-    สาม: "/images/staff/สาม.jpg",
-    มิ้นต์: "/placeholder.svg?height=80&width=80&text=มิ้นต์",
-    นิค: "/placeholder.svg?height=80&width=80&text=นิค",
-    เกลือ: "/placeholder.svg?height=80&width=80&text=เกลือ",
-    เป้ง: "/placeholder.svg?height=80&width=80&text=เป้ง",
-    // id_code
-    arm: "/images/staff/อาร์ม.jpg",
-    saam: "/images/staff/สาม.jpg",
-    toon: "/images/staff/พี่ตุ่น.jpg",
-    man: "/images/staff/แมน.jpg",
-    sanya: "/images/staff/พี่สัญญา.jpg",
-    noi: "/images/staff/ป้าน้อย.jpg",
-    pha: "/images/staff/พี่ภา.jpg",
-    ae: "/images/staff/เอ.jpg",
-    rd: "/images/staff/RD.jpg",
-    Ola: "/images/staff/โอเล่.jpg",
-    JJ: "/images/staff/จรัญ.jpeg",
-    Jak: "/images/staff/แจ็ค.jpg",
-  }
+  const staffImages = STAFF_IMAGES;
 
 
-  // Get production data for current week
-
-  // Get production data for selected day
   const getSelectedDayProduction = () => {
-    const targetDate = viewMode === "daily" ? selectedDate : selectedWeekDay;
-    if (!targetDate) return [];
-    const defaultCodes = ['A', 'B', 'C', 'D'];
-    const normalizeDate = (dateStr: string) => {
-      if (!dateStr) return '';
-      return formatDateForAPI(dateStr);
-    };
-    const dayData = productionData.filter(item => normalizeDate(item.production_date) === normalizeDate(targetDate));
-    
-    // งาน default (A,B,C,D) - ✅ แสดงทั้งหมด (ไม่ว่าจะเป็น draft หรือไม่)
-    let defaultDrafts = dayData.filter(item => defaultCodes.includes(item.job_code));
-    defaultDrafts.sort((a, b) => defaultCodes.indexOf(a.job_code) - defaultCodes.indexOf(b.job_code));
-
-    // งานปกติ (is_special !== 1 และ workflow_status_id !== 10, ไม่ใช่ default)
-    // ✅ แสดงทั้ง draft และ non-draft (ไม่กรอง draft ออก)
-    const normalJobs = dayData.filter(item => 
-      !defaultCodes.includes(item.job_code) && 
-      !isSpecialItem(item)
-    );
-    
-    // งานพิเศษ (is_special === 1 หรือ workflow_status_id === 10, ไม่ใช่ default)
-    // ✅ แสดงทั้ง draft และ non-draft (ไม่กรอง draft ออก)
-    const specialJobs = dayData.filter(item => 
-      !defaultCodes.includes(item.job_code) && 
-      isSpecialItem(item)
-    );
-    
-    // งาน draft (ไม่ใช้แล้ว - รวมอยู่ใน normalJobs และ specialJobs แล้ว)
-    const draftJobs: any[] = [];
-
-    // ฟังก์ชันเรียงตาม id อย่างเดียว (เก่าสุดก่อน)
-    const sortFn = (a: any, b: any) => {
-      return (Number(a.id) || 0) - (Number(b.id) || 0);
-    };
-    
-    normalJobs.sort(sortFn);
-    specialJobs.sort(sortFn);
-    draftJobs.sort(sortFn);
-
-    // Debug: แสดงข้อมูลการแยกงาน
-    debugLog("🔍 [DEBUG] getSelectedDayProduction แยกงาน:");
-    debugLog("🔍 [DEBUG] งานปกติ:", normalJobs.length, "รายการ");
-    debugLog("🔍 [DEBUG] งานพิเศษ:", specialJobs.length, "รายการ");
-    debugLog("🔍 [DEBUG] งานปกติ:", normalJobs.map(item => ({ 
-      job_name: item.job_name, 
-      is_special: item.is_special, 
-      workflow_status_id: item.workflow_status_id 
-    })));
-    debugLog("🔍 [DEBUG] งานพิเศษ:", specialJobs.map(item => ({ 
-      job_name: item.job_name, 
-      is_special: item.is_special, 
-      workflow_status_id: item.workflow_status_id 
-    })));
-
-    // รวมกลุ่มตามลำดับที่ต้องการ: default -> งานปกติ -> งานพิเศษ -> draft
-    return [...defaultDrafts, ...normalJobs, ...specialJobs, ...draftJobs];
+    return selectDayProduction(productionData as any, {
+      viewMode,
+      selectedDate,
+      selectedWeekDay,
+    });
   };
+
 
   // Use useMemo to recalculate when productionData changes
 
@@ -944,12 +860,6 @@ export default function MedicalAppointmentDashboard() {
     return end > start;
   };
 
-  // Helper function สำหรับ normalize เวลาให้เป็น HH:mm
-  const normalizeTimeForForm = (t: string) => {
-    if (!t) return "";
-    const [h, m] = t.split(":");
-    return `${h.padStart(2, "0")}:${m.padStart(2, "0")}`;
-  };
 
   // ฟังก์ชันดึงข้อมูลงานล่าสุด (return ข้อมูล)
   const fetchLatestWorkPlanData = async (jobCode: string, jobName: string) => {
@@ -1123,10 +1033,11 @@ export default function MedicalAppointmentDashboard() {
         work_order: workOrder // เพิ่มลำดับงาน
       };
       debugLog("[DEBUG] requestBody:", requestBody);
-      const res = await fetch(`/api/work-plans`, {
+      const res = await fetchWithTimeout(getApiUrl("/api/work-plans"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody),
+        timeout: SAVE_REQUEST_TIMEOUT_MS,
       });
       // ตรวจสอบ response ว่ามีเนื้อหาหรือไม่
       const text = await res.text();
@@ -1147,7 +1058,7 @@ export default function MedicalAppointmentDashboard() {
       
       if (data.success) {
         resetForm();
-        await loadAllProductionData();
+        loadAllProductionData().catch(e => debugError("Reload after submit:", e));
       } else {
         console.warn("[DEBUG] API error message:", data.message);
         setMessage(data.message || 'เกิดข้อผิดพลาดในการบันทึก');
@@ -1155,8 +1066,9 @@ export default function MedicalAppointmentDashboard() {
     } catch (err: any) {
       debugError("[DEBUG] API error:", err);
       setMessage(err?.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อ API');
+    } finally {
+      setIsSubmitting(false);
     }
-    setIsSubmitting(false);
   };
 
   const handleSaveDraft = async () => {
@@ -1276,12 +1188,14 @@ export default function MedicalAppointmentDashboard() {
       };
       
       debugLog('📅 Request body:', requestBody);
-      debugLog('📅 API URL:', `/api/work-plans`);
-      
-      const res = await fetch(`/api/work-plans`, {
+      const apiUrl = getApiUrl('/api/work-plans');
+      debugLog('📅 API URL:', apiUrl);
+
+      const res = await fetchWithTimeout(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody),
+        timeout: SAVE_REQUEST_TIMEOUT_MS,
       });
       
       debugLog('📅 Response status:', res.status);
@@ -1310,7 +1224,7 @@ export default function MedicalAppointmentDashboard() {
       if (success) {
         debugLog('🔧 Success - resetting form and reloading data');
         resetForm(); // ล้างค่าฟอร์มหลังบันทึกแบบร่างสำเร็จ
-        await loadAllProductionData();
+        loadAllProductionData().catch(e => debugError("Reload after save draft:", e));
       } else {
         debugLog('🔧 API returned success: false');
         setMessage(data?.message || 'เกิดข้อผิดพลาดในการบันทึก');
@@ -1318,9 +1232,9 @@ export default function MedicalAppointmentDashboard() {
     } catch (err: any) {
       debugError('📅 Error saving draft:', err);
       setMessage(err?.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อ API');
+    } finally {
+      setIsSubmitting(false);
     }
-    debugLog('🔧 Setting isSubmitting to false');
-    setIsSubmitting(false);
   };
 
   // Helper function to get room name from room code or ID
@@ -1648,7 +1562,9 @@ export default function MedicalAppointmentDashboard() {
           return user ? { id_code: user.id_code, name: user.name } : { name };
         });
       const isValid = validateEditDraft();
-      const workflowStatusId = isDraft ? 1 : (isValid ? 2 : 1); // 2 = บันทึกเสร็จสิ้น, 1 = แบบร่าง
+      const isPrinted =
+        editDraftData.workflow_status === 'printed' ||
+        editDraftData.workflow_status_id === 3;
       if (!isDraft && !isValid) {
         setMessage("กรุณากรอกข้อมูลให้ครบถ้วน");
         setIsSubmitting(false);
@@ -1663,21 +1579,21 @@ export default function MedicalAppointmentDashboard() {
         machine_id: machines.find(m => m.machine_code === editMachine)?.id || null,
         production_room_id: rooms.find(r => r.room_code === editRoom)?.id || null,
         notes: editNote,
-        workflow_status: isDraft ? 'draft' : 'completed',
+        workflow_status: isPrinted ? 'printed' : (isDraft ? 'draft' : 'completed'),
         operators: operatorsToSend
       };
-      // ตรวจสอบว่า editDraftData.id เป็น string และมี replace method
-      const draftId = editDraftData.id && typeof editDraftData.id === 'string' 
-        ? editDraftData.id.replace('draft_', '') 
+      // ตรวจสอบว่า editDraftData.id เป็น string และมี replace method (รองรับทั้ง job_type default A,B,C,D และ regular)
+      const draftId = editDraftData.id && typeof editDraftData.id === 'string'
+        ? editDraftData.id.replace('draft_', '')
         : String(editDraftData.id || '');
-      
-      const res = await fetch(getApiUrl(`/api/work-plans/${draftId}`), {
+
+      const res = await fetchWithTimeout(getApiUrl(`/api/work-plans/${draftId}`), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody),
+        timeout: SAVE_REQUEST_TIMEOUT_MS,
       });
-      
-      // ตรวจสอบ response ว่ามีเนื้อหาหรือไม่
+
       const text = await res.text();
       let data;
       try {
@@ -1687,25 +1603,30 @@ export default function MedicalAppointmentDashboard() {
         debugError("[DEBUG] Response text was:", text);
         throw new Error(`Invalid JSON response: ${text.substring(0, 100)}`);
       }
-      
+
       if (!res.ok) {
         throw new Error(data.message || `HTTP ${res.status}: ${res.statusText}`);
       }
-      
+
       if (data.success) {
-        const successMessage = isDraft ? "บันทึกแบบร่างสำเร็จ" : "บันทึกเสร็จสิ้น";
+        const successMessage = isDraft
+          ? "บันทึกแบบร่างสำเร็จ"
+          : isPrinted
+            ? "บันทึกสำเร็จ (สถานะพิมพ์แล้ว)"
+            : "บันทึกเสร็จสิ้น";
         setMessage(successMessage);
-        // ไม่แสดง popup สำเร็จหลังบันทึกเสร็จสิ้น เพื่อไม่ขัด flow การใช้งาน
         setEditDraftModalOpen(false);
-        await loadAllProductionData();
+        // โหลดข้อมูลในพื้นหลัง ไม่รอให้เสร็จ เพื่อไม่ให้หน้าค้าง (ทั้งงาน default และงานอื่น)
+        loadAllProductionData().catch(e => debugError("Reload after save:", e));
       } else {
         setMessage(data.message || "เกิดข้อผิดพลาด");
       }
     } catch (err: any) {
       debugError("[DEBUG] Error in handleSaveEditDraft:", err);
       setMessage(err?.message || "เกิดข้อผิดพลาดในการเชื่อมต่อ API");
+    } finally {
+      setIsSubmitting(false);
     }
-    setIsSubmitting(false);
   };
 
   // ฟังก์ชันพิมพ์ใบงาน
@@ -2267,38 +2188,29 @@ export default function MedicalAppointmentDashboard() {
   };
 
   // ✅ ปรับปรุง: ใช้ Backend API แทนการสร้างงานเองที่ Frontend
-  // เปลี่ยนจากสร้างทีละงาน → เรียก Backend API เดียว (transaction safety, performance ดีกว่า)
+  // เมื่อเลือกวันใหม่ (daily view) จะเรียก API สร้างงาน Type Default (A,B,C,D) ให้วันนั้น
+  // ใช้ AbortController เพื่อยกเลิก request เก่าถ้าผู้ใช้เปลี่ยนวันก่อน request เสร็จ
   useEffect(() => {
     if (viewMode !== "daily") return;
     if (!selectedDate) return;
-    if (isCreatingRef.current) return;
-    
+
+    const dateForThisRun = selectedDate;
+    const controller = new AbortController();
+
     const createDefaultTasks = async () => {
-      isCreatingRef.current = true;
-      
       try {
-        // ตรวจสอบว่า date มีค่า
-        if (!selectedDate) {
-          debugLog('[AUTO-DEFAULT] No selectedDate, skipping default task creation');
-          return;
-        }
-        
-        debugLog(`[AUTO-DEFAULT] Creating default tasks for date: ${selectedDate}`);
-        
-        // ✅ เรียก Next.js API route (ซึ่งจะ proxy ไปยัง Backend)
-        // Backend จะเช็คและสร้างเฉพาะงานที่ยังไม่มี (ละเอียดและแม่นยำ)
+        debugLog(`[AUTO-DEFAULT] Creating default tasks for date: ${dateForThisRun}`);
+
         const response = await fetch('/api/work-plans/create-defaults', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            production_date: selectedDate
-          })
+          body: JSON.stringify({ production_date: dateForThisRun }),
+          signal: controller.signal,
         });
-        
+
         if (response.ok) {
           const responseData = await response.json();
           debugLog(`[AUTO-DEFAULT] Successfully processed default tasks:`, responseData);
-          
           if (responseData.created) {
             debugLog(`[AUTO-DEFAULT] Created ${responseData.createdCount || 0} new tasks`);
           } else {
@@ -2306,25 +2218,26 @@ export default function MedicalAppointmentDashboard() {
           }
         } else {
           const errorData = await response.json().catch(() => ({ message: 'Unknown error' }));
-          debugError(`[AUTO-DEFAULT] Failed to create default tasks:`, {
-            status: response.status,
-            error: errorData
-          });
+          debugError(`[AUTO-DEFAULT] Failed to create default tasks:`, { status: response.status, error: errorData });
         }
-        
-        // โหลดข้อมูลใหม่หลังจากสร้าง tasks
-        await loadAllProductionData();
-        
-        debugLog(`[AUTO-DEFAULT] Completed processing default tasks for date: ${selectedDate}`);
-      } catch (error) {
+
+        // โหลดข้อมูลใหม่เฉพาะเมื่อวันที่ที่ request นี้ยังเป็นวันที่เลือกอยู่ (กันกรณีเปลี่ยนวันเร็ว)
+        if (selectedDate === dateForThisRun) {
+          await loadAllProductionData();
+        }
+        debugLog(`[AUTO-DEFAULT] Completed processing default tasks for date: ${dateForThisRun}`);
+      } catch (error: any) {
+        if (error?.name === 'AbortError') {
+          debugLog(`[AUTO-DEFAULT] Request aborted for date: ${dateForThisRun}`);
+          return;
+        }
         debugError('[AUTO-DEFAULT] Error creating default tasks:', error);
-      } finally {
-        isCreatingRef.current = false;
       }
     };
-    
+
     createDefaultTasks();
-  }, [selectedDate]);
+    return () => controller.abort();
+  }, [selectedDate, viewMode]);
 
   // เพิ่มฟังก์ชัน syncWorkOrder
   const syncWorkOrder = async (date: string) => {
@@ -2582,21 +2495,17 @@ export default function MedicalAppointmentDashboard() {
       }
       // ประมวลผลข้อมูล work plans
       let allData = (plans.data || []).map((p: any) => {
-        // กำหนดสถานะตาม workflow_status
-        let recordStatus = 'แบบร่าง';
-        let isPrintedFlag = false;
-        
-        if (p.workflow_status === 'draft') {
-          recordStatus = 'แบบร่าง';
-        } else if (p.workflow_status === 'completed') {
-          recordStatus = 'บันทึกเสร็จสิ้น';
-        } else if (p.workflow_status === 'printed') {
-          recordStatus = 'พิมพ์แล้ว';
-          isPrintedFlag = true;
-        }
-        
-        // กำหนด isDraft ตาม workflow_status
-        const isDraft = p.workflow_status === 'draft';
+        // กำหนดสถานะตาม workflow_status (หรือ workflow_status_id เมื่อ backend ไม่ส่ง workflow_status)
+        const wf = p.workflow_status;
+        const wfId = p.status_id != null ? Number(p.status_id) : p.workflow_status_id != null ? Number(p.workflow_status_id) : 1;
+        const resolvedCompleted = wf === 'completed' || wfId === 2 || wfId === 4; // 2=บันทึกเสร็จสิ้น, 4=เสร็จสิ้น
+        const resolvedPrinted = wf === 'printed' || wfId === 3;
+        const resolvedDraft = wf === 'draft' || (wfId !== 2 && wfId !== 3 && wfId !== 4);
+
+        let recordStatus = resolvedPrinted ? 'พิมพ์แล้ว' : resolvedCompleted ? 'บันทึกเสร็จสิ้น' : 'แบบร่าง';
+        let isPrintedFlag = resolvedPrinted;
+
+        const isDraft = resolvedDraft;
         
         // ใช้สถานะจาก logs ถ้ามี
         const logsStatus = logsStatusMap[p.id];
@@ -2635,7 +2544,7 @@ export default function MedicalAppointmentDashboard() {
           notes: p.notes || '',
           // รักษา backward compatibility
           is_special: p.job_type === 'special' ? 1 : 0,
-          workflow_status_id: p.workflow_status === 'draft' ? 1 : p.workflow_status === 'completed' ? 2 : 3,
+          workflow_status_id: isDraft ? 1 : resolvedPrinted ? 3 : 2,
         };
       });
              // ตั้งค่า state ทันทีหลังจากได้ข้อมูล
@@ -2691,272 +2600,6 @@ export default function MedicalAppointmentDashboard() {
     
     return jobIndex >= 0 ? `งานที่ ${jobIndex + 1}` : `งานที่ ${item.id}`;
   };
-
-  // ฟังก์ชันคำนวณข้อมูลสรุปการลงคนลงเวลา
-  const calculateDailySummary = (jobs: any[]) => {
-    // กรองเฉพาะงานที่มีผู้ปฏิบัติงานและเวลา
-    const validJobs = jobs.filter(job => 
-      job.operators && 
-      job.operators.length > 0 && 
-      job.start_time && 
-      job.end_time
-    );
-
-    // รวบรวมผู้ปฏิบัติงานทั้งหมดที่ไม่ซ้ำในวันนั้น
-    const allWorkers = new Set<string>();
-    
-    // คำนวณเวลาที่ใช้จริง (คน-ชั่วโมง)
-    let totalUsedTime = 0;
-    let totalWorkHours = 0;
-
-    // สร้าง Map สำหรับเก็บช่วงเวลาทำงานของแต่ละคน (เพื่อคำนวณเวลาจริงโดยไม่นับซ้ำ)
-    const workerTimeIntervals = new Map<string, Array<{ start: Date; end: Date }>>();
-
-    // รวบรวมช่วงเวลาทำงานของแต่ละคน
-    validJobs.forEach(job => {
-      const workers = getOperatorsArray(job.operators);
-      workers.forEach((worker: string) => {
-        allWorkers.add(worker);
-        
-        const startTime = new Date(`2000-01-01 ${job.start_time}`);
-        const endTime = new Date(`2000-01-01 ${job.end_time}`);
-        
-        if (!workerTimeIntervals.has(worker)) {
-          workerTimeIntervals.set(worker, []);
-        }
-        workerTimeIntervals.get(worker)!.push({ start: startTime, end: endTime });
-      });
-    });
-
-    // ฟังก์ชันรวมช่วงเวลาที่ทับซ้อนกัน (merge overlapping intervals)
-    const mergeIntervals = (intervals: Array<{ start: Date; end: Date }>): Array<{ start: Date; end: Date }> => {
-      if (intervals.length === 0) return [];
-      
-      // เรียงตามเวลาเริ่มต้น
-      const sorted = [...intervals].sort((a, b) => a.start.getTime() - b.start.getTime());
-      const merged: Array<{ start: Date; end: Date }> = [sorted[0]];
-      
-      for (let i = 1; i < sorted.length; i++) {
-        const current = sorted[i];
-        const last = merged[merged.length - 1];
-        
-        // ถ้าช่วงเวลาทับซ้อนหรือต่อกัน ให้รวมเข้าด้วยกัน
-        if (current.start.getTime() <= last.end.getTime()) {
-          last.end = new Date(Math.max(last.end.getTime(), current.end.getTime()));
-        } else {
-          merged.push(current);
-        }
-      }
-      
-      return merged;
-    };
-
-    // ฟังก์ชันคำนวณเวลาจริงจากช่วงเวลา (หักเวลาพักเที่ยง)
-    const calculateActualHours = (intervals: Array<{ start: Date; end: Date }>): number => {
-      const lunchStart = new Date(`2000-01-01 ${TIMETABLE_CONSTANTS.LUNCH_BREAK.START}`);
-      const lunchEnd = new Date(`2000-01-01 ${TIMETABLE_CONSTANTS.LUNCH_BREAK.END}`);
-      
-      let totalHours = 0;
-      
-      intervals.forEach(interval => {
-        let durationHours = (interval.end.getTime() - interval.start.getTime()) / (1000 * 60 * 60);
-        
-        // หักเวลาพักเที่ยงถ้ามีส่วนทับ
-        if (interval.start < lunchEnd && interval.end > lunchStart) {
-          const overlapStart = interval.start > lunchStart ? interval.start : lunchStart;
-          const overlapEnd = interval.end < lunchEnd ? interval.end : lunchEnd;
-          const overlapHours = (overlapEnd.getTime() - overlapStart.getTime()) / (1000 * 60 * 60);
-          durationHours -= overlapHours;
-        }
-        
-        totalHours += durationHours;
-      });
-      
-      return totalHours;
-    };
-
-    // คำนวณเวลาจริงของแต่ละคน (รวมช่วงเวลาที่ทับซ้อน)
-    const workerHours = new Map<string, number>();
-    workerTimeIntervals.forEach((intervals, worker) => {
-      const merged = mergeIntervals(intervals);
-      const actualHours = calculateActualHours(merged);
-      workerHours.set(worker, actualHours);
-      totalUsedTime += actualHours; // สำหรับ totalUsedTime ใช้เวลาจริงของแต่ละคน
-    });
-
-    // จำนวนผู้ปฏิบัติงานที่ไม่ซ้ำในวันนั้น
-    const totalWorkers = allWorkers.size;
-
-    // คำนวณเวลาพักเที่ยงจาก TIMETABLE_CONSTANTS (12:30-13:15 = 45 นาที)
-    const lunchStartTime = new Date(`2000-01-01 ${TIMETABLE_CONSTANTS.LUNCH_BREAK.START}`);
-    const lunchEndTime = new Date(`2000-01-01 ${TIMETABLE_CONSTANTS.LUNCH_BREAK.END}`);
-    const lunchBreakMinutes = (lunchEndTime.getTime() - lunchStartTime.getTime()) / (1000 * 60);
-    const lunchBreakHours = lunchBreakMinutes / 60; // 45 นาที = 0.75 ชั่วโมง
-
-    // คำนวณชั่วโมงงาน (จำนวนผู้ปฏิบัติงาน × เวลาทำงานจริงต่อวัน)
-    // เวลาทำงานจริง = 8 ชั่วโมง - เวลาพักเที่ยง
-    const workHoursPerDay = 8 - lunchBreakHours; // 7.25 ชั่วโมง (ถ้าพัก 45 นาที)
-    totalWorkHours = totalWorkers * workHoursPerDay;
-
-    // คำนวณ Capacity (%)
-    const capacityPercentage = totalWorkHours > 0 ? (totalUsedTime / totalWorkHours) * 100 : 0;
-
-    // สร้างรายการข้อมูลของแต่ละคน
-    const workerDetails = Array.from(allWorkers).map(worker => {
-      const hours = workerHours.get(worker) || 0;
-      const quota = workHoursPerDay; // โคต้าเวลาทำงานจริงต่อวัน (8 ชั่วโมง - เวลาพักเที่ยงจาก TIMETABLE_CONSTANTS)
-      const maxQuota = 7.5; // เกิน 7.5 ชั่วโมง ให้ถือว่าเต็มเวลา (7.25 + buffer 15 นาที)
-      const remaining = Math.max(0, quota - hours);
-      
-      // ใช้ threshold เล็กน้อยเพื่อจัดการปัญหา floating point precision
-      const EPSILON = 0.001; // 0.001 ชั่วโมง = 0.06 นาที
-      
-      let status, displayHours, displayText;
-      
-      // ฟังก์ชันแปลงเวลาจากทศนิยมเป็นรูปแบบที่อ่านง่าย
-      const formatRemainingTime = (hours: number) => {
-        // ปัดเศษเพื่อหลีกเลี่ยงปัญหา floating point
-        const roundedHours = Math.round(hours * 60) / 60; // ปัดเศษเป็นนาทีแล้วแปลงกลับ
-        
-        if (roundedHours <= EPSILON) return '0 ชั่วโมง';
-        
-        // ใช้ Math.floor เพื่อหลีกเลี่ยงปัญหา rounding ที่อาจทำให้ได้ 60 นาที
-        const totalMinutes = Math.round(roundedHours * 60); // แปลงเป็นนาทีทั้งหมดแล้วปัดเศษ
-        const wholeHours = Math.floor(totalMinutes / 60);
-        const minutes = totalMinutes % 60;
-        
-        if (wholeHours === 0) {
-          return `ว่าง ${minutes} นาที`;
-        } else if (minutes === 0) {
-          return `ว่าง ${wholeHours} ชั่วโมง`;
-        } else {
-          return `ว่าง ${wholeHours} ชั่วโมง ${minutes} นาที`;
-        }
-      };
-      
-      // ตรวจสอบสถานะ: ใช้ EPSILON เพื่อจัดการปัญหา floating point precision
-      if (hours >= maxQuota || remaining <= EPSILON) {
-        // เกิน 7.5 ชั่วโมง (maxQuota) หรือเหลือน้อยมาก (<= 0.001 ชั่วโมง) ให้แสดงว่าเต็มเวลา
-        status = 'full';
-        displayHours = quota;
-        displayText = 'ได้รับงานเต็มเวลา';
-      } else if (remaining > EPSILON && remaining <= 2) {
-        // เหลือมากกว่า 0.001 ชั่วโมง แต่ไม่เกิน 2 ชั่วโมง
-        status = 'limited';
-        displayHours = hours;
-        displayText = formatRemainingTime(remaining);
-      } else {
-        // เหลือมากกว่า 2 ชั่วโมง
-        status = 'available';
-        displayHours = hours;
-        displayText = formatRemainingTime(remaining);
-      }
-      
-      return {
-        name: worker,
-        hours: hours,
-        quota: quota,
-        remaining: remaining,
-        status: status,
-        displayHours: displayHours,
-        displayText: displayText
-      };
-    }).sort((a, b) => b.remaining - a.remaining); // เรียงตามเวลาว่างจากมากไปน้อย (ว่างมากขึ้นก่อน)
-
-    return {
-      totalWorkers,
-      totalWorkHours,
-      totalUsedTime,
-      capacityPercentage,
-      validJobsCount: validJobs.length,
-      uniqueWorkers: Array.from(allWorkers), // เพิ่มรายชื่อผู้ปฏิบัติงานที่ไม่ซ้ำ
-      lunchBreakDeduction: lunchBreakHours, // ข้อมูลเวลาพักเที่ยงที่หัก (คำนวณจาก TIMETABLE_CONSTANTS)
-      availableWorkers: users
-        .filter(user => !allWorkers.has(user.name)) // คนที่ไม่ได้ทำงาน
-        .filter(user => !['RD', 'พี่สัญญา'].includes(user.name)) // กรองพนักงานเสริมออก
-        .map(user => user.name), // คนที่ยังรับงานได้ (เฉพาะผู้ปฏิบัติงานหลัก)
-      availableSupportStaff: users
-        .filter(user => !allWorkers.has(user.name)) // คนที่ไม่ได้ทำงาน
-        .filter(user => ['RD', 'พี่สัญญา'].includes(user.name)) // เฉพาะพนักงานเสริม
-        .map(user => user.name), // พนักงานเสริมที่ว่าง
-      workerDetails: workerDetails // รายละเอียดของแต่ละคน
-    };
-  };
-
-  // เพิ่มฟังก์ชันเรียงลำดับงานแบบเดียวกับ Draft
-  const sortJobsForDisplay = (jobs: any[]) => {
-    return [...jobs].sort((a, b) => {
-      const timeA = a.start_time || "00:00";
-      const timeB = b.start_time || "00:00";
-      const timeComparison = timeA.localeCompare(timeB);
-      if (timeComparison !== 0) return timeComparison;
-      // เรียงผู้ปฏิบัติงานที่ขึ้นต้นด้วย 'อ' ขึ้นก่อน
-      const opA = (typeof a.operators === 'string' ? a.operators : "").split(", ")[0] || "";
-      const opB = (typeof b.operators === 'string' ? b.operators : "").split(", ")[0] || "";
-      const indexA = opA.indexOf("อ");
-      const indexB = opB.indexOf("อ");
-      if (indexA === 0 && indexB !== 0) return -1;
-      if (indexB === 0 && indexA !== 0) return 1;
-      return opA.localeCompare(opB);
-    });
-  };
-
-  // ฟังก์ชันสำหรับ Daily View: งานปกติเรียงก่อน งานพิเศษต่อท้าย (ใช้ is_special)
-  const getSortedDailyProduction = (jobs: any[]) => {
-    const defaultCodes = ['A', 'B', 'C', 'D'];
-    
-    // แยกงานเป็นกลุ่มต่างๆ
-    const defaultDrafts = jobs.filter(j => defaultCodes.includes(j.job_code));
-    const normalJobs = jobs.filter(j => !defaultCodes.includes(j.job_code) && j.is_special !== 1);
-    const specialJobs = jobs.filter(j => j.is_special === 1 && !defaultCodes.includes(j.job_code));
-    
-    // แยกงานแบบร่าง (isDraft = true) ออกจากงานปกติ
-    const normalDrafts = normalJobs.filter(j => j.isDraft);
-    const normalCompleted = normalJobs.filter(j => !j.isDraft);
-    const specialDrafts = specialJobs.filter(j => j.isDraft);
-    const specialCompleted = specialJobs.filter(j => !j.isDraft);
-    
-    // เรียงงาน default ตามลำดับ A, B, C, D
-    defaultDrafts.sort((a, b) => defaultCodes.indexOf(a.job_code) - defaultCodes.indexOf(b.job_code));
-    
-    // เรียงงานปกติและงานพิเศษที่เสร็จแล้วตามเวลา
-    const sortFn = (a: any, b: any) => {
-      const timeA = a.start_time || "00:00";
-      const timeB = b.start_time || "00:00";
-      const timeComparison = timeA.localeCompare(timeB);
-      if (timeComparison !== 0) return timeComparison;
-      const opA = String(getOperatorsArray(a.operators)[0] || "");
-      const opB = String(getOperatorsArray(b.operators)[0] || "");
-      const indexA = opA.indexOf("อ");
-      const indexB = opB.indexOf("อ");
-      if (indexA === 0 && indexB !== 0) return -1;
-      if (indexB === 0 && indexA !== 0) return 1;
-      return opA.localeCompare(opB);
-    };
-    
-    normalCompleted.sort(sortFn);
-    specialCompleted.sort(sortFn);
-    
-    // เรียงงานแบบร่างตามเวลาที่สร้าง (ใหม่สุดอยู่ล่างสุด)
-    const sortDraftsByCreatedAt = (a: any, b: any) => {
-      const createdAtA = new Date(a.created_at || a.updated_at || 0);
-      const createdAtB = new Date(b.created_at || b.updated_at || 0);
-      return createdAtA.getTime() - createdAtB.getTime(); // เรียงจากเก่าไปใหม่
-    };
-    
-    normalDrafts.sort(sortDraftsByCreatedAt);
-    specialDrafts.sort(sortDraftsByCreatedAt);
-    
-    // ส่งคืนตามลำดับ: default -> งานปกติเสร็จแล้ว -> งานปกติแบบร่าง -> งานพิเศษเสร็จแล้ว -> งานพิเศษแบบร่าง (งานพิเศษอยู่ล่างสุดเสมอ)
-    return [
-      ...defaultDrafts,
-      ...normalCompleted,
-      ...normalDrafts,
-      ...specialCompleted,
-      ...specialDrafts
-    ];
-  };
-
 
   // ===== Weekly board interactions =====
   const handleEditClick = (item: any) => {
@@ -3070,201 +2713,7 @@ export default function MedicalAppointmentDashboard() {
     })
   }
 
-  // ฟังก์ชันสร้าง time slots 30 นาที
-  function generateTimeSlots(start = "08:00", end = "17:00", step = 30) {
-    const pad = (n: number) => n.toString().padStart(2, "0");
-    const result = [];
-    let [h, m] = start.split(":").map(Number);
-    const [endH, endM] = end.split(":").map(Number);
-    
-    while (h < endH || (h === endH && m <= endM)) {
-      const timeSlot = `${pad(h)}:${pad(m)}`;
-      
-      // ข้ามเวลาพักเที่ยง 12:30-13:15
-      if (timeSlot === "12:30") {
-        result.push("12:30-13:15"); // เพิ่มคอลัมน์เวลาพักเที่ยง
-        // ข้ามไปที่ 13:15
-        h = 13;
-        m = 15;
-        continue;
-      }
-      
-      result.push(timeSlot);
-      m += step;
-      if (m >= 60) { h++; m = m - 60; }
-    }
-    return result;
-  }
 
-  // ฟังก์ชันเตรียมข้อมูล Time Table
-  function getTimeTableData(jobs: any[], users: any[]) {
-    // กรองเฉพาะผู้ปฏิบัติงานหลัก
-    const mainUsers = users.filter(u => !["RD", "พี่สัญญา"].includes(u.name));
-    const timeSlots = generateTimeSlots();
-    
-    // สลับตำแหน่ง แมน กับ แจ็ค (แมนขึ้นก่อน)
-    const sortedUsers = mainUsers.sort((a, b) => {
-      if (a.name === "แมน") return -1;
-      if (b.name === "แมน") return 1;
-      if (a.name === "แจ็ค") return 1;
-      if (b.name === "แจ็ค") return -1;
-      return a.name.localeCompare(b.name);
-    });
-    
-    // เตรียมข้อมูลแต่ละคน
-    const data = sortedUsers.map(user => {
-      // หางานที่ user นี้ทำ
-      const userJobs = jobs.filter(job => {
-        if (!job.operators || !job.start_time || !job.end_time) return false;
-        return getOperatorsArray(job.operators).includes(user.name);
-      });
-      
-      // สร้างข้อมูล slot ที่มีการ merge งานต่อเนื่อง
-      const slots = timeSlots.map((slot, slotIndex) => {
-        // ตรวจสอบว่าเป็นเวลาพักเที่ยงหรือไม่
-        if (slot === "12:30-13:15") {
-          return {
-            hasJob: false,
-            jobName: "",
-            jobCode: "",
-            isStart: false,
-            isEnd: false,
-            colspan: 1,
-            isLunchBreak: true
-          };
-        }
-        
-        // หางานที่ตรงกับ slot นี้
-        const jobInfo = userJobs.find(job => {
-          return slot >= job.start_time && slot < job.end_time;
-        });
-        
-        if (!jobInfo) {
-          return {
-            hasJob: false,
-            jobName: "",
-            jobCode: "",
-            isStart: false,
-            isEnd: false,
-            colspan: 1,
-            isLunchBreak: false
-          };
-        }
-        
-        // คำนวณ colspan สำหรับงานต่อเนื่อง
-        const jobStartSlotIndex = timeSlots.findIndex(s => s >= jobInfo.start_time);
-        const jobEndSlotIndex = timeSlots.findIndex(s => s >= jobInfo.end_time);
-        const colspan = jobEndSlotIndex > jobStartSlotIndex ? jobEndSlotIndex - jobStartSlotIndex : 1;
-        
-        // ตรวจสอบว่าเป็น slot แรกของงานนี้หรือไม่
-        const isStart = slotIndex === jobStartSlotIndex;
-        
-        // ตรวจสอบว่าเป็น slot สุดท้ายของงานนี้หรือไม่
-        const isEnd = slotIndex === jobStartSlotIndex + colspan - 1;
-        
-        return {
-          hasJob: true,
-          jobName: jobInfo.job_name,
-          jobCode: jobInfo.job_code,
-          isStart,
-          isEnd,
-          colspan: isStart ? colspan : 1,
-          isLunchBreak: false
-        };
-      });
-      
-      return { name: user.name, slots };
-    });
-    return { timeSlots, data };
-  }
-
-  // สีสำหรับแต่ละคน
-  const workerColors = {
-    "ป้าน้อย": "bg-blue-400",
-    "พี่ตุ่น": "bg-green-400", 
-    "พี่ภา": "bg-yellow-400",
-    "สาม": "bg-purple-400",
-    "อาร์ม": "bg-pink-400",
-    "เอ": "bg-indigo-400",
-    "แจ็ค": "bg-orange-400",
-    "แมน": "bg-red-400",
-    "โอเล่": "bg-teal-400"
-  };
-
-  // คอมโพเนนต์ TimeTable
-  function TimeTable({ jobs, users, staffImages }: { jobs: any[], users: any[], staffImages: any }) {
-    const { timeSlots, data } = getTimeTableData(jobs, users);
-    return (
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-max border text-sm shadow-lg">
-          <thead>
-            <tr>
-              <th className="p-2 border bg-gray-100 text-left font-semibold text-sm whitespace-nowrap">ชื่อ</th>
-              {timeSlots.map((slot, idx) => (
-                <th 
-                  key={slot} 
-                  className={`p-2 border text-center font-bold text-base min-w-[120px] whitespace-nowrap ${
-                    slot === "12:30-13:15" 
-                      ? "bg-orange-200 text-orange-800" 
-                      : "bg-green-100 text-green-800"
-                  }`}
-                >
-                  {slot === "12:30-13:15" ? "พักเที่ยง" : slot}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {data.map((row, idx) => (
-              <tr key={row.name}>
-                <td className="p-2 border bg-white whitespace-nowrap">
-                  <div className="flex items-center space-x-2">
-                    <img src={staffImages[row.name] || "/placeholder-user.jpg"} alt={row.name} className="w-6 h-6 rounded-full object-cover" />
-                    <span className="font-semibold text-sm">{row.name}</span>
-                  </div>
-                </td>
-                {row.slots.map((slot, i) => {
-                  // ข้าม slot ที่ไม่ใช่จุดเริ่มต้นของงาน
-                  if (slot.hasJob && !slot.isStart) {
-                    return null;
-                  }
-                  
-                  return (
-                    <td 
-                      key={i} 
-                      colSpan={slot.hasJob ? slot.colspan : 1}
-                      className={`border p-3 relative min-h-[50px] ${
-                        slot.isLunchBreak 
-                          ? "bg-gray-200 text-gray-600" 
-                          : slot.hasJob 
-                            ? workerColors[row.name as keyof typeof workerColors] || "bg-green-400" 
-                            : "bg-white"
-                      }`}
-                    >
-                      {slot.isLunchBreak && (
-                        <div className="flex items-center justify-center text-base font-bold min-h-[50px]">
-                          <span className="text-center leading-tight">
-                            พักเที่ยง
-                          </span>
-                        </div>
-                      )}
-                      {slot.hasJob && (
-                        <div className="flex items-center justify-center text-white text-sm font-medium min-h-[50px] overflow-hidden">
-                          <span className="text-center leading-tight" title={slot.jobName}>
-                            {slot.jobName}
-                          </span>
-                        </div>
-                      )}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    );
-  }
 
   // Debug Modal state
   useEffect(() => {
@@ -3455,571 +2904,85 @@ export default function MedicalAppointmentDashboard() {
           <div
             className={`transition-all duration-300 ${isFormCollapsed ? "lg:w-0 lg:overflow-hidden" : "w-full lg:w-2/5"}`}
           >
-            <Card className="shadow-lg bg-white h-fit">
-              <CardHeader className="pb-3 sm:pb-4">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center space-x-2 text-sm sm:text-base md:text-lg">
-                    <UserIcon className="w-4 h-4 sm:w-5 sm:h-5 text-green-600" />
-                    <span className="leading-7 text-2xl">เพิ่มงานที่ต้องการผลิต</span>
-                  </CardTitle>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setIsFormCollapsed(!isFormCollapsed)}
-                    className="text-white bg-green-600 hover:bg-green-700 border-2 border-green-500 rounded-full w-8 h-8 sm:w-10 sm:h-10 p-0 flex items-center justify-center flex-shrink-0 transition-all duration-300 shadow-lg hover:shadow-xl"
-                  >
-                    <PanelLeftClose className="w-4 h-4 sm:w-5 sm:h-5" />
-                  </Button>
-                </div>
-              </CardHeader>
+            <div className="flex flex-col gap-3 sm:gap-4">
+            <AddJobFormCard
+              isFormCollapsed={isFormCollapsed}
+              onToggleCollapsed={() => setIsFormCollapsed(!isFormCollapsed)}
+              selectedDate={selectedDate}
+              onSelectedDateChange={setSelectedDate}
+              jobQuery={jobQuery}
+              onJobSelect={async (jobCode, jobName) => {
+                debugLog('🎯 JobSearchSelect selected:', { jobCode, jobName });
+                setJobCode(jobCode);
+                setJobName(jobName);
+                setJobQuery(jobName);
+                if (jobCode === 'NEW' || !jobCode) return;
+                const latestData = await fetchLatestWorkPlanData(jobCode, jobName);
+                if (latestData) {
+                  setPendingJobData({ jobCode, jobName });
+                  setPendingLatestData(latestData);
+                  setShowAutoFillDialog(true);
+                }
+              }}
+              onAddNewJob={(jobName) => {
+                debugLog('➕ Adding new job:', jobName);
+                const newJobCode = handleAddNewJob();
+                setJobName(jobName);
+                setJobQuery(jobName);
+                setMessage(`✅ เพิ่มงานใหม่: "${jobName}" (รหัสงาน: ${newJobCode})`);
+              }}
+              onClearForm={clearFormFields}
+              operators={operators}
+              setOperators={setOperators}
+              users={users}
+              startTime={startTime}
+              setStartTime={setStartTime}
+              endTime={endTime}
+              setEndTime={setEndTime}
+              selectedRoom={selectedRoom}
+              setSelectedRoom={setSelectedRoom}
+              selectedMachine={selectedMachine}
+              setSelectedMachine={setSelectedMachine}
+              note={note}
+              onNoteChange={setNote}
+              rooms={rooms}
+              machines={machines}
+              timeOptions={timeOptions}
+              isSubmitting={isSubmitting}
+              autoFilledFields={autoFilledFields}
+              setAutoFilledFields={setAutoFilledFields}
+              shouldFocusFields={shouldFocusFields}
+              setShouldFocusFields={setShouldFocusFields}
+              className={notoSansThai.className}
+              operatorsRefs={operatorsRefs}
+              startTimeRef={startTimeRef}
+              endTimeRef={endTimeRef}
+              roomRef={roomRef}
+              onSaveDraft={handleSaveDraft}
+              onSubmit={handleSubmit}
+            />
 
-              {!isFormCollapsed && (
-                <CardContent className="space-y-3 sm:space-y-4 md:space-y-6">
-                  {/* Date Selection */}
-                  <div className="space-y-2">
-                    <Label className="text-xs sm:text-sm font-bold text-gray-700">วันที่ผลิต</Label>
-                    <SimpleDatePicker
-                      value={selectedDate}
-                      onChange={setSelectedDate}
-                      placeholder="เลือกวันที่ผลิต"
-                      className="w-full"
-                    />
-                  </div>
-
-                  {/* Autocomplete Job Name/Code */}
-                  <div className="space-y-2 relative">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-xs sm:text-sm font-bold text-gray-700">เพิ่มงานผลิต</Label>
-                      <button
-                        type="button"
-                        onClick={clearFormFields}
-                        disabled={isSubmitting}
-                        className="text-sm text-green-600 hover:text-green-700 underline disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                      >
-                        ล้างข้อมูลทั้งหมด
-                      </button>
-                    </div>
-                    <div className="relative">
-                      <JobSearchSelect
-                        value={jobQuery}
-                        onChange={async (jobCode, jobName) => {
-                          debugLog('🎯 JobSearchSelect selected:', { jobCode, jobName });
-                          setJobCode(jobCode);
-                          setJobName(jobName);
-                          setJobQuery(jobName);
-                          
-                          // ถ้าเป็นงานใหม่ ไม่ต้องแสดง popup
-                          if (jobCode === 'NEW' || !jobCode) {
-                            return;
-                          }
-                          
-                          // ดึงข้อมูลงานล่าสุดเพื่อตรวจสอบว่ามีข้อมูลหรือไม่
-                          const latestData = await fetchLatestWorkPlanData(jobCode, jobName);
-                          
-                          // ถ้ามีข้อมูลล่าสุด ให้แสดง popup ถามผู้ใช้
-                          if (latestData) {
-                            setPendingJobData({ jobCode, jobName });
-                            setPendingLatestData(latestData);
-                            setShowAutoFillDialog(true);
-                          }
-                        }}
-                        onAddNew={(jobName) => {
-                          debugLog('➕ Adding new job:', jobName);
-                          // สร้าง job_code ใหม่อัตโนมัติ
-                          const newJobCode = handleAddNewJob();
-                          setJobName(jobName);
-                          setJobQuery(jobName);
-                          setMessage(`✅ เพิ่มงานใหม่: "${jobName}" (รหัสงาน: ${newJobCode})`);
-                        }}
-                        placeholder="ค้นหางานผลิต..."
-                        isDisabled={isSubmitting}
-                        allowAddNew={true}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Staff Positions */}
-                  <div className="space-y-3 sm:space-y-4">
-                    <Label className="text-xs sm:text-sm font-bold text-gray-700">ผู้ปฏิบัติงาน (1-4 คน)</Label>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                      {[1, 2, 3, 4].map((position) => {
-                        // กรองผู้ปฏิบัติงานที่เลือกแล้วในช่องอื่นๆ ออก
-                        const selectedOperators = operators.filter((op, idx) => op && op !== "" && idx !== position - 1);
-                        const availableUsers = users.filter(u => !selectedOperators.includes(u.name));
-                        
-                        // ตรวจสอบว่าช่องก่อนหน้ายังว่างอยู่หรือไม่ (สำหรับ validation)
-                        const isPreviousEmpty = position > 1 && (!operators[position - 2] || operators[position - 2] === "");
-                        const isDisabled = isPreviousEmpty;
-                        
-                        return (
-                          <div key={position} className="space-y-1 sm:space-y-2">
-                            <Label className={`text-xs text-gray-600 ${isDisabled ? 'text-gray-400' : ''}`}>
-                              ผู้ปฏิบัติงาน {position}
-                              {isDisabled && <span className="ml-1 text-xs text-gray-400">(ต้องกรอกคนที่ {position - 1} ก่อน)</span>}
-                            </Label>
-                            <Select
-                              value={operators[position - 1] || "__none__"}
-                              onValueChange={(val) => {
-                                const newOps = [...operators];
-                                const newValue = val === "__none__" ? "" : val;
-                                newOps[position - 1] = newValue;
-                                
-                                // ถ้าเคลียร์ช่อง ให้เคลียร์ช่องถัดไปทั้งหมดด้วย
-                                if (newValue === "") {
-                                  for (let i = position; i < 4; i++) {
-                                    newOps[i] = "";
-                                  }
-                                }
-                                
-                                setOperators(newOps);
-                                // เมื่อผู้ใช้แก้ไข ให้ลบ focus
-                                setShouldFocusFields(false);
-                                setAutoFilledFields(new Set());
-                              }}
-                              disabled={isDisabled}
-                            >
-                              <SelectTrigger 
-                                ref={operatorsRefs[position - 1] as any}
-                                className={`h-8 sm:h-9 text-sm focus:ring-2 focus:ring-green-500 focus:ring-offset-2 ${shouldFocusFields && autoFilledFields.has('operators') && operators[position - 1] ? 'ring-2 ring-green-500 ring-offset-2' : ''} ${isDisabled ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                disabled={isDisabled}
-                              >
-                                <SelectValue placeholder={isDisabled ? "กรุณากรอกคนที่ " + (position - 1) + " ก่อน" : "เลือก"} />
-                              </SelectTrigger>
-                              <SelectContent className={notoSansThai.className}>
-                                <SelectItem value="__none__" className={notoSansThai.className}>กรุณาเลือก</SelectItem>
-                                {availableUsers.map(u => (
-                                  <SelectItem key={u.id_code} value={u.name} className={notoSansThai.className}>{u.name}</SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Time Slots */}
-                  {/* ซ่อนฟิลด์เครื่องบันทึกข้อมูลการผลิต */}
-                  {/* <div className="space-y-3 sm:space-y-4">
-                    <Label className="text-xs sm:text-sm font-bold text-gray-700">เครื่องบันทึกข้อมูลการผลิต</Label>
-                    <Select
-                      value={selectedMachine || "__none__"}
-                      onValueChange={val => setSelectedMachine(val === "__none__" ? "" : val)}
-                    >
-                      <SelectTrigger className="text-sm">
-                        <SelectValue placeholder="เลือก..." />
-                      </SelectTrigger>
-                      <SelectContent className={notoSansThai.className}>
-                        <SelectItem value="__none__" className={notoSansThai.className}>กรุณาเลือก</SelectItem>
-                        {machines.map(m => (
-                          <SelectItem key={m.machine_code} value={m.machine_code} className={notoSansThai.className}>{m.machine_name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div> */}
-
-                  {/* Time Range */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                    <div className="space-y-2">
-                      <Label className="text-xs sm:text-sm font-bold text-gray-700">เวลาเริ่ม</Label>
-                      <div className="relative">
-                        <div className="relative">
-                          <Select value={startTime || "__none__"} onValueChange={val => {
-                            const newStartTime = val === "__none__" ? "" : val;
-                            setStartTime(newStartTime);
-                            
-                            // ถ้าเปลี่ยนเวลาเริ่ม และเวลาสิ้นสุดปัจจุบันน้อยกว่าหรือเท่ากับเวลาเริ่มใหม่ ให้เคลียร์เวลาสิ้นสุด
-                            if (newStartTime && endTime && endTime <= newStartTime) {
-                              setEndTime("");
-                            }
-                            
-                            // เมื่อผู้ใช้แก้ไข ให้ลบ focus
-                            setShouldFocusFields(false);
-                            setAutoFilledFields(new Set());
-                          }}>
-                            <SelectTrigger 
-                              ref={startTimeRef as any}
-                              className={`text-sm pl-8 ${shouldFocusFields && autoFilledFields.has('startTime') && startTime ? 'ring-2 ring-green-500 ring-offset-2' : ''}`}
-                            >
-                              <SelectValue placeholder="เลือกเวลาเริ่ม..." />
-                            </SelectTrigger>
-                            <SelectContent className={notoSansThai.className}>
-                              <SelectItem value="__none__" className={notoSansThai.className}>เลือกเวลาเริ่ม...</SelectItem>
-                              {timeOptions.map(t => (
-                                <SelectItem key={t} value={t} className={notoSansThai.className}>{t}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <Clock className="w-3 h-3 sm:w-4 sm:h-4 text-gray-400 absolute left-2 sm:left-3 top-1/2 transform -translate-y-1/2" />
-                        </div>
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <Label className="text-xs sm:text-sm font-bold text-gray-700">เวลาสิ้นสุด</Label>
-                      <div className="relative">
-                        <div className="relative">
-                          <Select value={endTime || "__none__"} onValueChange={val => {
-                            setEndTime(val === "__none__" ? "" : val);
-                            // เมื่อผู้ใช้แก้ไข ให้ลบ focus
-                            setShouldFocusFields(false);
-                            setAutoFilledFields(new Set());
-                          }}>
-                            <SelectTrigger 
-                              ref={endTimeRef as any}
-                              className={`text-sm pl-8 ${shouldFocusFields && autoFilledFields.has('endTime') && endTime ? 'ring-2 ring-green-500 ring-offset-2' : ''}`}
-                            >
-                              <SelectValue placeholder="เลือกเวลาสิ้นสุด..." />
-                            </SelectTrigger>
-                            <SelectContent className={notoSansThai.className}>
-                              <SelectItem value="__none__" className={notoSansThai.className}>เลือกเวลาสิ้นสุด...</SelectItem>
-                              {timeOptions
-                                .filter(t => {
-                                  // ถ้ามีเวลาเริ่ม ให้แสดงเฉพาะเวลาที่มากกว่าเวลาเริ่ม
-                                  if (startTime && t <= startTime) {
-                                    return false;
-                                  }
-                                  return true;
-                                })
-                                .map(t => (
-                                  <SelectItem key={t} value={t} className={notoSansThai.className}>{t}</SelectItem>
-                                ))}
-                            </SelectContent>
-                          </Select>
-                          <Clock className="w-3 h-3 sm:w-4 sm:h-4 text-gray-400 absolute left-2 sm:left-3 top-1/2 transform -translate-y-1/2" />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Notes */}
-                  <div className="space-y-2">
-                    <Label className="text-xs sm:text-sm font-bold text-gray-700">หมายเหตุ</Label>
-                    <RichNoteEditor
-                      value={note}
-                      onChange={(v: string) => setNote(v)}
-                      className="text-sm"
-                      placeholder="เพิ่มหมายเหตุเพิ่มเติมสำหรับการผลิต..."
-                    />
-                  </div>
-
-                  {/* ห้องผลิต (dropdown จริง ใต้เวลาเริ่ม-สิ้นสุด) */}
-                  <div className="space-y-2 mt-2">
-                    <Label className="text-xs sm:text-sm font-bold text-gray-700">ห้องผลิต</Label>
-                    <Select
-                      value={selectedRoom || "__none__"}
-                      onValueChange={val => {
-                        setSelectedRoom(val === "__none__" ? "" : val);
-                        // เมื่อผู้ใช้แก้ไข ให้ลบ focus
-                        setShouldFocusFields(false);
-                        setAutoFilledFields(new Set());
-                      }}
-                    >
-                      <SelectTrigger 
-                        ref={roomRef as any}
-                        className={`text-sm ${shouldFocusFields && autoFilledFields.has('room') && selectedRoom ? 'ring-2 ring-green-500 ring-offset-2' : ''}`}
-                      >
-                        <SelectValue placeholder="เลือกห้องผลิต..." />
-                      </SelectTrigger>
-                      <SelectContent className={notoSansThai.className}>
-                        <SelectItem value="__none__" className={notoSansThai.className}>กรุณาเลือก</SelectItem>
-                        {rooms.map(r => (
-                          <SelectItem key={r.room_code} value={r.room_code} className={notoSansThai.className}>{r.room_name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  {/* Submit Buttons */}
-                  <div className="pt-4 sm:pt-6">
-                    <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
-                      <Button
-                        variant="outline"
-                        className="flex-1 border-2 border-gray-400 text-gray-700 hover:bg-gray-100 bg-white text-sm font-medium py-2 px-4"
-                        onClick={() => {
-                          debugLog('🔧 Button clicked!');
-                          handleSaveDraft();
-                        }}
-                        disabled={isSubmitting}
-                      >
-                        {isSubmitting ? "กำลังบันทึก..." : "บันทึกแบบร่าง"}
-                      </Button>
-                      <Button
-                        className="flex-1 bg-green-600 hover:bg-green-700 text-white text-sm font-medium py-2 px-4 shadow-md"
-                        onClick={handleSubmit}
-                        disabled={isSubmitting}
-                      >
-                        {isSubmitting ? "กำลังบันทึก..." : "บันทึกเสร็จสิ้น"}
-                      </Button>
-                    </div>
-                  </div>
-                </CardContent>
-              )}
-            </Card>
-            {/* Dashboard Card แยกออกมา */}
-            {!isFormCollapsed && (
-              <Card className="shadow-lg bg-white mt-8">
-                <CardHeader className="pb-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                  <CardTitle className="flex items-center space-x-2 text-sm sm:text-base md:text-lg">
-                    <BarChart3 className="w-4 h-4 sm:w-5 sm:h-5 text-green-600" />
-                    <span>Dashboard การลงคนลงเวลา</span>
-                  </CardTitle>
-                  {true && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        const dateStr = formatDateForAPI(selectedDate || new Date() as any);
-                        router.push(`/planner/timetable?date=${encodeURIComponent(dateStr)}`)
-                      }}
-                      className="text-xs px-2 py-1 whitespace-nowrap border-blue-300 text-blue-600 hover:bg-blue-50"
-                    >
-                      แสดงตารางเวลาการทำงาน
-                    </Button>
-                  )}
-                </CardHeader>
-                <CardContent>
-                  {(() => {
-                      const summary = calculateDailySummary(getSelectedDayProduction());
-                      return (
-                        <div className="space-y-3">
-                          <div className="grid grid-cols-2 gap-3 text-xs sm:text-sm">
-                            <div className="bg-blue-50 p-3 rounded-lg border border-blue-200">
-                              <div className="text-blue-600 font-medium">จำนวนผู้ปฏิบัติงาน</div>
-                              <div className="text-2xl font-bold text-blue-700">{summary.totalWorkers} คน</div>
-                            </div>
-                            <div className="bg-green-50 p-3 rounded-lg border border-green-200">
-                              <div className="text-green-600 font-medium">ชั่วโมงงาน</div>
-                              <div className="text-2xl font-bold text-green-700">{summary.totalWorkHours.toFixed(1)} ชม.</div>
-                            </div>
-                            <div className="bg-orange-50 p-3 rounded-lg border border-orange-200">
-                              <div className="text-orange-600 font-medium">เวลาที่ใช้ลงงาน</div>
-                              <div className="text-2xl font-bold text-orange-700">{summary.totalUsedTime.toFixed(1)} ชม.</div>
-                              <div className="text-xs text-orange-600 mt-1">(หักพักเที่ยง 45 นาที)</div>
-                            </div>
-                            <div className={`p-3 rounded-lg border ${
-                              summary.capacityPercentage > 100 
-                                ? 'bg-red-50 border-red-200' 
-                                : summary.capacityPercentage >= 80 
-                                  ? 'bg-green-50 border-green-200'
-                                  : 'bg-yellow-50 border-yellow-200'
-                            }`}>
-                              <div className={`font-medium ${
-                                summary.capacityPercentage > 100 
-                                  ? 'text-red-600' 
-                                  : summary.capacityPercentage >= 80 
-                                    ? 'text-green-600'
-                                    : 'text-yellow-600'
-                              }`}>Capacity</div>
-                              <div className={`text-2xl font-bold ${
-                                summary.capacityPercentage > 100 
-                                  ? 'text-red-700' 
-                                  : summary.capacityPercentage >= 80 
-                                    ? 'text-green-700'
-                                    : 'text-yellow-700'
-                              }`}>
-                                {summary.capacityPercentage.toFixed(1)}%
-                              </div>
-                            </div>
-                          </div>
-                          
-                          {/* รายชื่อผู้ปฏิบัติงาน */}
-                          <div className="bg-gray-50 p-3 rounded-lg border">
-                            <div className="text-gray-600 font-bold text-base mb-2">รายชื่อผู้ปฏิบัติงาน ({summary.totalWorkers} คน)</div>
-                            <div className="text-sm text-gray-700">
-                              {summary.uniqueWorkers.join(', ')}
-                            </div>
-                          </div>
-
-                          {/* คนที่ยังรับงานได้ - แสดงเฉพาะเมื่อมีคนว่าง */}
-                          {summary.availableWorkers.length > 0 && (
-                            <div className="bg-blue-50 p-3 rounded-lg border border-blue-200">
-                              <div className="text-blue-600 font-medium mb-2">ผู้ปฏิบัติงานหลักที่ว่าง ({summary.availableWorkers.length} คน)</div>
-                              <div className="text-sm text-blue-700">
-                                {summary.availableWorkers.join(', ')}
-                              </div>
-                            </div>
-                          )}
-
-                          {/* รายละเอียดของแต่ละคน */}
-                          <div 
-                            className="bg-gray-50 p-3 rounded-lg border cursor-pointer hover:bg-gray-100 transition-colors"
-                            onClick={() => setShowWorkerDetails(!showWorkerDetails)}
-                          >
-                            <div className="flex items-center justify-between mb-2">
-                              <div className="text-gray-600 font-medium">รายละเอียดการทำงานของแต่ละคน</div>
-                              {/* ลบปุ่มแสดงตารางเวลาการทำงานออก เหลือแค่ปุ่ม toggle รายละเอียด */}
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={(e) => {
-                                  e.stopPropagation(); // ป้องกันการ trigger onClick ของ parent
-                                  setShowWorkerDetails(!showWorkerDetails);
-                                }}
-                                className="p-1 h-6 w-6"
-                              >
-                                {showWorkerDetails ? (
-                                  <ChevronUp className="w-4 h-4" />
-                                ) : (
-                                  <ChevronDown className="w-4 h-4" />
-                                )}
-                              </Button>
-                            </div>
-                            {showWorkerDetails && (
-                              <div className="space-y-2">
-                                {/* แสดงคนที่ยังรับงานได้ก่อน */}
-                                {summary.workerDetails.filter(worker => worker.status === 'available').length > 0 && (
-                                  <div className="text-xs font-semibold text-green-700 mb-2">🟢 คนที่ยังรับงานได้</div>
-                                )}
-                                {summary.workerDetails
-                                  .filter(worker => worker.status === 'available')
-                                  .map((worker, index) => (
-                                <div key={index} className={`p-3 rounded border text-xs ${
-                                  worker.status === 'full' 
-                                    ? 'bg-red-50 border-red-200'
-                                    : worker.status === 'limited'
-                                      ? 'bg-yellow-50 border-yellow-200'
-                                      : 'bg-green-50 border-green-200'
-                                }`}>
-                                  <div className="flex items-center justify-between">
-                                    <div className="flex items-center space-x-3">
-                                      <Avatar className="w-8 h-8">
-                                        <AvatarImage
-                                          src={staffImages[worker.name] || "/placeholder-user.jpg"}
-                                          alt={worker.name}
-                                          className="object-cover object-center"
-                                        />
-                                        <AvatarFallback className="text-xs font-medium bg-green-100 text-green-800">
-                                          {worker.name.substring(0, 2)}
-                                        </AvatarFallback>
-                                      </Avatar>
-                                      <span className="font-medium text-sm">{worker.name}</span>
-                                    </div>
-                                    <span className={`font-bold text-sm ${
-                                      worker.status === 'full' 
-                                        ? 'text-red-600'
-                                        : worker.status === 'limited'
-                                          ? 'text-yellow-600'
-                                          : 'text-green-600'
-                                    }`}>
-                                      {worker.displayText}
-                                    </span>
-                                  </div>
-                                </div>
-                                ))}
-                                
-                                {/* แสดงคนที่ใกล้เต็มเวลา */}
-                                {summary.workerDetails.filter(worker => worker.status === 'limited').length > 0 && (
-                                  <div className="text-xs font-semibold text-yellow-700 mb-2 mt-4">🟡 คนที่ใกล้เต็มเวลา</div>
-                                )}
-                                {summary.workerDetails
-                                  .filter(worker => worker.status === 'limited')
-                                  .map((worker, index) => (
-                                  <div key={`limited-${index}`} className={`p-3 rounded border text-xs ${
-                                    worker.status === 'full' 
-                                      ? 'bg-red-50 border-red-200'
-                                      : worker.status === 'limited'
-                                        ? 'bg-yellow-50 border-yellow-200'
-                                        : 'bg-green-50 border-green-200'
-                                  }`}>
-                                    <div className="flex items-center justify-between">
-                                      <div className="flex items-center space-x-3">
-                                        <Avatar className="w-8 h-8">
-                                          <AvatarImage
-                                            src={staffImages[worker.name] || "/placeholder-user.jpg"}
-                                            alt={worker.name}
-                                            className="object-cover object-center"
-                                          />
-                                          <AvatarFallback className="text-xs font-medium bg-green-100 text-green-800">
-                                            {worker.name.substring(0, 2)}
-                                          </AvatarFallback>
-                                        </Avatar>
-                                        <span className="font-medium text-sm">{worker.name}</span>
-                                      </div>
-                                      <span className={`font-bold text-sm ${
-                                        worker.status === 'full' 
-                                          ? 'text-red-600'
-                                          : worker.status === 'limited'
-                                            ? 'text-yellow-600'
-                                            : 'text-green-600'
-                                      }`}>
-                                        {worker.displayText}
-                                      </span>
-                                    </div>
-                                  </div>
-                                ))}
-                                
-                                {/* แสดงคนที่เต็มเวลา */}
-                                {summary.workerDetails.filter(worker => worker.status === 'full').length > 0 && (
-                                  <div className="text-xs font-semibold text-red-700 mb-2 mt-4">🔴 คนที่เต็มเวลา</div>
-                                )}
-                                {summary.workerDetails
-                                  .filter(worker => worker.status === 'full')
-                                  .map((worker, index) => (
-                                  <div key={`full-${index}`} className={`p-3 rounded border text-xs ${
-                                    worker.status === 'full' 
-                                      ? 'bg-red-50 border-red-200'
-                                      : worker.status === 'limited'
-                                        ? 'bg-yellow-50 border-yellow-200'
-                                        : 'bg-green-50 border-green-200'
-                                  }`}>
-                                    <div className="flex items-center justify-between">
-                                      <div className="flex items-center space-x-3">
-                                        <Avatar className="w-8 h-8">
-                                          <AvatarImage
-                                            src={staffImages[worker.name] || "/placeholder-user.jpg"}
-                                            alt={worker.name}
-                                            className="object-cover object-center"
-                                          />
-                                          <AvatarFallback className="text-xs font-medium bg-green-100 text-green-800">
-                                            {worker.name.substring(0, 2)}
-                                          </AvatarFallback>
-                                        </Avatar>
-                                        <span className="font-medium text-sm">{worker.name}</span>
-                                      </div>
-                                      <span className={`font-bold text-sm ${
-                                        worker.status === 'full' 
-                                          ? 'text-red-600'
-                                          : worker.status === 'limited'
-                                            ? 'text-yellow-600'
-                                            : 'text-green-600'
-                                      }`}>
-                                        {worker.displayText}
-                                      </span>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Status Indicator */}
-                          <div className="bg-gray-50 p-3 rounded-lg border">
-                            <div className="text-gray-600 font-medium mb-2">สถานะการลงคนลงเวลา</div>
-                            <div className={`text-sm font-medium p-2 rounded ${
-                              summary.capacityPercentage > 100 
-                                ? 'text-red-700 bg-red-100 border border-red-200' 
-                                : summary.capacityPercentage >= 80 
-                                  ? 'text-green-700 bg-green-100 border border-green-200'
-                                  : 'text-yellow-700 bg-yellow-100 border border-yellow-200'
-                            }`}>
-                              {summary.capacityPercentage > 100 
-                                ? '⚠️ เกินความสามารถ (เกิน 100%) - ควรเพิ่มคนหรือลดงาน' 
-                                : summary.capacityPercentage >= 80 
-                                  ? '✅ การลงคนลงเวลาสมบูรณ์ (80-100%) - ใช้งานเต็มที่'
-                                  : '⚡ การลงคนลงเวลาต่ำ (ต่ำกว่า 80%) - ควรเพิ่มงานหรือลดคน'
-                              }
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })()}
-                </CardContent>
-              </Card>
+            {showDashboard && (
+              <StaffingDashboardCard
+                summary={(() => {
+                  try {
+                    return calculateDailySummary(getSelectedDayProduction(), users);
+                  } catch (e) {
+                    console.error('Error calculating dashboard summary:', e);
+                    return null;
+                  }
+                })()}
+                staffImages={staffImages}
+                showWorkerDetails={showWorkerDetails}
+                onToggleWorkerDetails={() => setShowWorkerDetails(!showWorkerDetails)}
+                onOpenTimetable={() => {
+                  const dateStr = formatDateForAPI(selectedDate || new Date() as any);
+                  router.push(`/planner/timetable?date=${encodeURIComponent(dateStr)}`);
+                }}
+              />
             )}
+            </div>
           </div>
-
-
 
           {/* Mobile Toggle Button */}
           {isFormCollapsed && (
@@ -4167,18 +3130,23 @@ export default function MedicalAppointmentDashboard() {
                               production_room: item.production_room,
                               operators_type: typeof item.operators
                             });
+                            // สถานะผลิตเดียวกันสำหรับทั้ง border-left และ Badge (ใช้ status_name + status จาก logs)
+                            const prodStatus = (item.status_name || item.status || "").trim();
+                            const isCancel = prodStatus.includes("ยกเลิก") || prodStatus.includes("ยกเลิกการผลิต");
+                            const isDone = prodStatus.includes("เสร็จสิ้น") || prodStatus.includes("สำเร็จ");
+                            const isPending = prodStatus.includes("รอดำเนินการ") || prodStatus.toLowerCase().includes("pending");
+                            const isInProgress = (prodStatus.includes("กำลังดำเนินการ") || (prodStatus.includes("ดำเนินการ") && !isPending));
+                            const borderClasses = isCancel
+                              ? "border-l-red-400 bg-red-50"
+                              : isDone
+                              ? "border-l-green-400 bg-green-50"
+                              : isInProgress
+                              ? "border-l-yellow-400 bg-yellow-50"
+                              : "border-l-gray-400 bg-gray-50";
                             return (
                             <div
                               key={item.id}
-                              className={`border-l-4 ${
-                                item.status === "งานผลิตถูกยกเลิก" || item.status_name === "ยกเลิกการผลิต"
-                                  ? "border-l-red-400 bg-red-50"
-                                  : item.status_name === "งานผลิตเสร็จสิ้น" || item.status_name === "เสร็จสิ้น"
-                                      ? "border-l-green-400 bg-green-50"
-                                      : (item.status_name && (item.status_name.includes("รอดำเนินการ") || item.status_name.toLowerCase().includes("pending")))
-                                      ? "border-l-gray-400 bg-gray-50"
-                                          : "border-l-gray-400 bg-gray-50"
-                              } ${isFormCollapsed ? "p-3 sm:p-4 md:p-6" : "p-2 sm:p-3 md:p-4"} rounded-r-lg`}
+                              className={`border-l-4 ${borderClasses} ${isFormCollapsed ? "p-3 sm:p-4 md:p-6" : "p-2 sm:p-3 md:p-4"} rounded-r-lg`}
                             >
                               <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2 sm:gap-3">
                                 <div className="space-y-1 sm:space-y-2 flex-1 min-w-0">
@@ -4208,13 +3176,10 @@ export default function MedicalAppointmentDashboard() {
                                       <Badge
                                         variant="outline"
                                         className={`${isFormCollapsed ? "text-xs sm:text-sm" : "text-xs"} ${
-                                          item.status_name === "งานผลิตถูกยกเลิก" || item.status_name === "ยกเลิกการผลิต"
-                                                ? "border-red-500 text-red-700"
-                                            : (item.status_name && (item.status_name.includes("รอดำเนินการ") || item.status_name.toLowerCase().includes("pending")))
-                                              ? "border-gray-500 text-gray-700"
-                                              : item.status_name === "งานผลิตเสร็จสิ้น" || item.status_name === "เสร็จสิ้น"
-                                                ? "border-green-500 text-green-700"
-                                                : "border-gray-500 text-gray-700"
+                                          isCancel ? "border-red-500 text-red-700"
+                                            : isDone ? "border-green-500 text-green-700"
+                                            : isInProgress ? "border-yellow-500 text-yellow-700 bg-yellow-50"
+                                            : "border-gray-500 text-gray-700"
                                         } flex-shrink-0`}
                                       >
                                         {item.status_name}
@@ -4314,8 +3279,46 @@ export default function MedicalAppointmentDashboard() {
                                     <Clock
                                       className={`${isFormCollapsed ? "w-4 h-4 sm:w-5 sm:h-5" : "w-3 h-3 sm:w-4 sm:h-4"} text-gray-400 flex-shrink-0`}
                                     />
-                                      <span className="text-blue-600 font-semibold">
-                                        {item.start_time?.substring(0, 5) || "08:00"} - {(item.end_time || "17:00:00").substring(0, 5)}
+                                      <span className={`font-semibold ${(() => {
+                                        // เช็คว่ามีเวลาหรือไม่ (null, undefined, empty string)
+                                        if (!item.start_time || !item.end_time || 
+                                            item.start_time === '' || item.end_time === '' ||
+                                            item.start_time === null || item.end_time === null) {
+                                          return false;
+                                        }
+                                        const start = item.start_time.substring(0, 5);
+                                        const end = item.end_time.substring(0, 5);
+                                        // ถ้าเป็นค่า default 08:00-17:00 หรือ 08:00-09:00 (จากงาน default) ให้ถือว่าเป็นค่า default
+                                        // แต่ถ้าเป็นแบบร่าง (draft) และเป็นค่า default ให้แสดง --:-- - --:--
+                                        if (start === '08:00' && (end === '17:00' || end === '09:00')) {
+                                          // เช็คว่าเป็นแบบร่างหรือไม่
+                                          if (item.workflow_status === 'draft' || item.recordStatus === 'แบบร่าง' || item.recordStatus === 'บันทึกแบบร่าง') {
+                                            return false; // แสดงเป็นสีเทา
+                                          }
+                                        }
+                                        return true; // แสดงเป็นสีน้ำเงิน
+                                      })() ? "text-blue-600" : "text-gray-500"}`}>
+                                        {(() => {
+                                          // แปลงเวลาเป็น HH:MM (รองรับทั้ง string "HH:MM"/"HH:MM:SS" และ object จาก API)
+                                          const toHHMM = (t: any): string => {
+                                            if (t == null || t === '') return '';
+                                            if (typeof t === 'string') {
+                                              const part = t.trim();
+                                              if (part.length >= 5) return part.substring(0, 5); // HH:MM or HH:MM:SS
+                                              return part;
+                                            }
+                                            if (typeof t === 'object' && typeof t.getHours === 'function') {
+                                              const h = (t as Date).getHours();
+                                              const m = (t as Date).getMinutes();
+                                              return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+                                            }
+                                            return '';
+                                          };
+                                          const start = toHHMM(item.start_time);
+                                          const end = toHHMM(item.end_time);
+                                          if (!start || !end) return "--:-- - --:--";
+                                          return `${start} - ${end}`;
+                                        })()}
                                       </span>
                                       {/* หมายเหตุ (ถ้ามี) - อยู่บรรทัดเดียวกับเวลา */}
                                       {item.notes && (
@@ -4360,18 +3363,7 @@ export default function MedicalAppointmentDashboard() {
                                             <Eye className="w-3 h-3" />
                                         </Button>
                                       )}
-                                      {/* เปลี่ยนปุ่มดินสอเป็นปุ่มกากบาทเมื่อสถานะเป็น "พิมพ์แล้ว" */}
-                                      {getJobStatus(item) === "พิมพ์แล้ว" ? (
-                                        <Button
-                                            variant="outline"
-                                            size="sm"
-                                            onClick={() => handleCancelProduction(item.id)}
-                                            className="border-2 border-red-300 text-red-600 hover:bg-red-50 bg-white text-xs font-medium px-2 py-1"
-                                          >
-                                            <XCircle className="w-3 h-3" />
-                                        </Button>
-                                      ) : (
-                                        <Button
+                                      <Button
                                             variant="outline"
                                             size="sm"
                                             onClick={() => handleEditDraft(item)}
@@ -4379,7 +3371,6 @@ export default function MedicalAppointmentDashboard() {
                                           >
                                             <Edit className="w-3 h-3" />
                                         </Button>
-                                      )}
                                         </>
                                     )}
                                   </div>
@@ -4422,533 +3413,99 @@ export default function MedicalAppointmentDashboard() {
         </div>
       </footer>
 
-      {/* Modal สำหรับแก้ไข draft */}
-      <Dialog open={editDraftModalOpen} onOpenChange={setEditDraftModalOpen}>
-        <DialogContent className={`max-w-4xl max-h-[90vh] overflow-y-auto ${notoSansThai.className}`}>
-          <DialogHeader>
-            <DialogTitle className={notoSansThai.className}>แก้ไขแบบร่างงานผลิต</DialogTitle>
-          </DialogHeader>
+      <EditDraftModal
+        open={editDraftModalOpen}
+        onOpenChange={setEditDraftModalOpen}
+        editDraftData={editDraftData}
+        editDraftId={editDraftId}
+        users={users}
+        machines={machines}
+        rooms={rooms}
+        timeOptions={timeOptions}
+        isSubmitting={isSubmitting}
+        className={notoSansThai.className}
+        editJobName={editJobName}
+        setEditJobName={setEditJobName}
+        editOperators={editOperators}
+        setEditOperators={setEditOperators}
+        editStartTime={editStartTime}
+        setEditStartTime={setEditStartTime}
+        editEndTime={editEndTime}
+        setEditEndTime={setEditEndTime}
+        editRoom={editRoom}
+        setEditRoom={setEditRoom}
+        editMachine={editMachine}
+        setEditMachine={setEditMachine}
+        editNote={editNote}
+        setEditNote={setEditNote}
+        editDate={editDate}
+        setEditDate={setEditDate}
+        onSaveDraft={() => handleSaveEditDraft(true)}
+        onSaveComplete={() => handleSaveEditDraft(false)}
+        onDeleteDraft={handleDeleteDraft}
+        onCancelProduction={handleCancelProduction}
+        onDeleteWorkPlan={handleDeleteWorkPlan}
+      />
 
-      {/* Modal สำหรับแสดงรายละเอียดการผลิต */}
-      <Dialog open={productionDetailsModalOpen} onOpenChange={setProductionDetailsModalOpen}>
-        <DialogContent className={`max-w-4xl max-h-[90vh] overflow-y-auto ${notoSansThai.className}`}>
-          <DialogHeader>
-            <DialogTitle className={notoSansThai.className}>รายละเอียดการผลิต</DialogTitle>
-          </DialogHeader>
-          {productionDetailsData && (
-            <div className="space-y-6">
-              {/* ข้อมูลงาน */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-3">
-                  <div>
-                    <Label className={`text-sm font-bold text-gray-700 ${notoSansThai.className}`}>ชื่องาน</Label>
-                    <p className={`text-lg font-semibold text-gray-900 ${notoSansThai.className}`}>
-                      {productionDetailsData.job_name}
-                    </p>
-                  </div>
-                  <div>
-                    <Label className={`text-sm font-bold text-gray-700 ${notoSansThai.className}`}>หมายเหตุ</Label>
-                    <p className={`text-sm text-gray-600 ${notoSansThai.className}`}>
-                      {productionDetailsData.notes || productionDetailsData.note || "ไม่มีหมายเหตุ"}
-                    </p>
-                  </div>
-                  <div>
-                    <Label className={`text-sm font-bold text-gray-700 ${notoSansThai.className}`}>ผู้ปฏิบัติงาน</Label>
-                    <p className={`text-sm text-gray-600 ${notoSansThai.className}`}>
-                      {productionDetailsData.operators || "ไม่ระบุ"}
-                    </p>
-                  </div>
-                </div>
-                <div className="space-y-3">
-                  <div>
-                    <Label className={`text-sm font-bold text-gray-700 ${notoSansThai.className}`}>เวลาเริ่มต้นตามแผนผลิต</Label>
-                    <p className={`text-lg font-semibold text-blue-600 ${notoSansThai.className}`}>
-                      {productionDetailsData.start_time || "ไม่ระบุ"}
-                    </p>
-                  </div>
-                  <div>
-                    <Label className={`text-sm font-bold text-gray-700 ${notoSansThai.className}`}>เวลาสิ้นสุดตามแผนผลิต</Label>
-                    <p className={`text-lg font-semibold text-blue-600 ${notoSansThai.className}`}>
-                      {productionDetailsData.end_time || "ไม่ระบุ"}
-                    </p>
-                  </div>
-                </div>
-              </div>
+      <ProductionDetailsModal
+        open={productionDetailsModalOpen}
+        onOpenChange={setProductionDetailsModalOpen}
+        data={productionDetailsData}
+        logs={productionLogs}
+        formatTime={formatTime}
+        formatDuration={formatDuration}
+        className={notoSansThai.className}
+      />
 
-              {/* ข้อมูลจาก Logs */}
-              <div>
-                <Label className={`text-lg font-bold text-gray-700 ${notoSansThai.className}`}>ข้อมูลการผลิตตามจริง</Label>
-                {productionLogs.length > 0 ? (
-                  <div className="mt-3 space-y-3">
-                    {productionLogs.map((log, index) => (
-                      <div key={index} className="border border-gray-200 rounded-lg p-4 bg-gray-50">
-                        <div className="mb-3">
-                          <Label className={`text-sm font-bold text-gray-700 ${notoSansThai.className}`}>ขั้นตอนที่ {log.process_number}</Label>
-                          <p className={`text-sm text-gray-600 ${notoSansThai.className}`}>
-                            {log.process_description || "ไม่ระบุ"}
-                          </p>
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                          <div>
-                            <Label className={`text-sm font-bold text-gray-700 ${notoSansThai.className}`}>เวลาเริ่มต้นตามจริง</Label>
-                            <p className={`text-sm text-green-600 ${notoSansThai.className}`}>
-                              {formatTime(log.start_time)}
-                            </p>
-                          </div>
-                          <div>
-                            <Label className={`text-sm font-bold text-gray-700 ${notoSansThai.className}`}>เวลาสิ้นสุดตามจริง</Label>
-                            <p className={`text-sm text-green-600 ${notoSansThai.className}`}>
-                              {formatTime(log.stop_time)}
-                            </p>
-                          </div>
-                          <div>
-                            <Label className={`text-sm font-bold text-gray-700 ${notoSansThai.className}`}>เวลาที่ใช้</Label>
-                            <p className={`text-sm text-purple-600 ${notoSansThai.className}`}>
-                              {formatDuration(log.used_time)}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="mt-3 p-4 border border-gray-200 rounded-lg bg-gray-50">
-                    <p className={`text-sm text-gray-500 text-center ${notoSansThai.className}`}>
-                      ไม่มีข้อมูลการผลิตตามจริง
-                    </p>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <Button 
-              variant="outline" 
-              onClick={() => setProductionDetailsModalOpen(false)}
-              className={notoSansThai.className}
-            >
-              ปิด
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 py-2">
-            {/* คอลัมน์ซ้าย */}
-            <div className="space-y-3">
-              {/* วันที่ผลิต */}
-              <div className="space-y-1">
-                <Label className={`text-xs font-bold text-gray-700 ${notoSansThai.className}`}>วันที่ผลิต</Label>
-                <SimpleDatePicker
-                  value={editDate}
-                  onChange={setEditDate}
-                  placeholder="เลือกวันที่"
-                  className="w-full"
-                />
-              </div>
-              {/* ชื่องาน */}
-              <div className="space-y-1">
-                <Label className={`text-xs font-bold text-gray-700 ${notoSansThai.className}`}>ชื่องาน</Label>
-                <Input
-                  value={editJobName}
-                  onChange={e => setEditJobName(e.target.value)}
-                  className={`text-sm h-8 ${notoSansThai.className}`}
-                />
-              </div>
-              {/* เครื่องบันทึกข้อมูลการผลิต */}
-              <div className="space-y-1">
-                <Label className={`text-xs font-bold text-gray-700 ${notoSansThai.className}`}>เครื่องบันทึกข้อมูลการผลิต</Label>
-                <Select
-                  value={editMachine || "__none__"}
-                  onValueChange={val => setEditMachine(val === "__none__" ? "" : val)}
-                >
-                  <SelectTrigger className={`text-sm h-8 ${notoSansThai.className}`}>
-                    <SelectValue placeholder="เลือก..." />
-                  </SelectTrigger>
-                  <SelectContent className={notoSansThai.className}>
-                    <SelectItem value="__none__" className={notoSansThai.className}>กรุณาเลือก</SelectItem>
-                    {machines.map(m => (
-                      <SelectItem key={m.machine_code} value={m.machine_code} className={notoSansThai.className}>{m.machine_name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              {/* ห้องผลิต */}
-              <div className="space-y-1">
-                <Label className={`text-xs font-bold text-gray-700 ${notoSansThai.className}`}>ห้องผลิต</Label>
-                <Select
-                  value={editRoom || "__none__"}
-                  onValueChange={val => setEditRoom(val === "__none__" ? "" : val)}
-                >
-                  <SelectTrigger className={`text-sm h-8 ${notoSansThai.className}`}>
-                    <SelectValue placeholder="เลือกห้องผลิต..." />
-                  </SelectTrigger>
-                  <SelectContent className={notoSansThai.className}>
-                    <SelectItem value="__none__" className={notoSansThai.className}>กรุณาเลือก</SelectItem>
-                    {rooms.map(r => (
-                      <SelectItem key={r.room_code} value={r.room_code} className={notoSansThai.className}>{r.room_name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
+      <PlannerConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title={confirmTitle}
+        message={confirmMessage}
+        onConfirm={handleConfirmYes}
+        onCancel={handleConfirmNo}
+        className={notoSansThai.className}
+      />
 
-            {/* คอลัมน์ขวา */}
-            <div className="space-y-3">
-              {/* ผู้ปฏิบัติงาน */}
-              <div className="space-y-1">
-                <Label className={`text-xs font-bold text-gray-700 ${notoSansThai.className}`}>ผู้ปฏิบัติงาน (1-4 คน)</Label>
-                <div className="grid grid-cols-2 gap-2">
-                  {[1, 2, 3, 4].map((position) => {
-                    // ตรวจสอบว่าช่องก่อนหน้ายังว่างอยู่หรือไม่ (สำหรับ validation)
-                    const isPreviousEmpty = position > 1 && (!editOperators[position - 2] || editOperators[position - 2] === "");
-                    const isDisabled = isPreviousEmpty;
-                    
-                    return (
-                      <div key={position} className="space-y-1">
-                        <Label className={`text-xs text-gray-600 ${notoSansThai.className} ${isDisabled ? 'text-gray-400' : ''}`}>
-                          ผู้ปฏิบัติงาน {position}
-                          {isDisabled && <span className="ml-1 text-xs text-gray-400">(ต้องกรอกคนที่ {position - 1} ก่อน)</span>}
-                        </Label>
-                        <Select
-                          value={editOperators[position - 1] || "__none__"}
-                          onValueChange={val => {
-                            const newOps = [...editOperators];
-                            const newValue = val === "__none__" ? "" : val;
-                            newOps[position - 1] = newValue;
-                            
-                            // ถ้าเคลียร์ช่อง ให้เคลียร์ช่องถัดไปทั้งหมดด้วย
-                            if (newValue === "") {
-                              for (let i = position; i < 4; i++) {
-                                newOps[i] = "";
-                              }
-                            }
-                            
-                            setEditOperators(newOps);
-                          }}
-                          disabled={isDisabled}
-                        >
-                          <SelectTrigger className={`h-8 text-xs ${notoSansThai.className} ${isDisabled ? 'opacity-50 cursor-not-allowed' : ''}`} disabled={isDisabled}>
-                            <SelectValue placeholder={isDisabled ? "กรุณากรอกคนที่ " + (position - 1) + " ก่อน" : "เลือก"} />
-                          </SelectTrigger>
-                          <SelectContent className={notoSansThai.className}>
-                            <SelectItem value="__none__" className={notoSansThai.className}>กรุณาเลือก</SelectItem>
-                            {users && users.length > 0 ? (
-                              users.map(u => (
-                                <SelectItem key={u.id_code} value={u.name} className={notoSansThai.className}>{u.name}</SelectItem>
-                              ))
-                            ) : (
-                              <SelectItem value="__none__" className={notoSansThai.className}>ไม่พบข้อมูลผู้ปฏิบัติงาน</SelectItem>
-                            )}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-              {/* เวลาเริ่ม-สิ้นสุด */}
-              <div className="grid grid-cols-2 gap-2">
-                <div className="space-y-1">
-                  <Label className={`text-xs font-bold text-gray-700 ${notoSansThai.className}`}>เวลาเริ่ม</Label>
-                  <Select value={editStartTime || "__none__"} onValueChange={val => setEditStartTime(val === "__none__" ? "" : val)}>
-                    <SelectTrigger className={`text-sm h-8 ${notoSansThai.className}`}>
-                      <SelectValue placeholder="เลือกเวลาเริ่ม..." />
-                    </SelectTrigger>
-                    <SelectContent className={notoSansThai.className}>
-                      <SelectItem value="__none__" className={notoSansThai.className}>เลือกเวลาเริ่ม...</SelectItem>
-                      {timeOptions && timeOptions.length > 0 ? (
-                        timeOptions.map(t => (
-                          <SelectItem key={t} value={t} className={notoSansThai.className}>{t}</SelectItem>
-                        ))
-                      ) : (
-                        <SelectItem value="__none__" className={notoSansThai.className}>ไม่พบตัวเลือกเวลา</SelectItem>
-                      )}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1">
-                  <Label className={`text-xs font-bold text-gray-700 ${notoSansThai.className}`}>เวลาสิ้นสุด</Label>
-                  <Select value={editEndTime || "__none__"} onValueChange={val => setEditEndTime(val === "__none__" ? "" : val)}>
-                    <SelectTrigger className={`text-sm h-8 ${notoSansThai.className}`}>
-                      <SelectValue placeholder="เลือกเวลาสิ้นสุด..." />
-                    </SelectTrigger>
-                    <SelectContent className={notoSansThai.className}>
-                      <SelectItem value="__none__" className={notoSansThai.className}>เลือกเวลาสิ้นสุด...</SelectItem>
-                      {timeOptions && timeOptions.length > 0 ? (
-                        timeOptions.map(t => (
-                          <SelectItem key={t} value={t} className={notoSansThai.className}>{t}</SelectItem>
-                        ))
-                      ) : (
-                        <SelectItem value="__none__" className={notoSansThai.className}>ไม่พบตัวเลือกเวลา</SelectItem>
-                      )}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              {/* หมายเหตุ */}
-              <div className="space-y-1">
-                <Label className={`text-xs font-bold text-gray-700 ${notoSansThai.className}`}>หมายเหตุ</Label>
-                <RichNoteEditor
-                  value={editNote}
-                  onChange={(v: string) => setEditNote(v)}
-                  className={`text-sm ${notoSansThai.className}`}
-                  placeholder="เพิ่มหมายเหตุเพิ่มเติมสำหรับการผลิต..."
-                />
-              </div>
-            </div>
-          </div>
-          <DialogFooter className="flex justify-between">
-            {/* ปุ่มการกระทำซ้าย: ลบเมื่อเป็น draft, หรือยกเลิกงานเมื่อเป็น completed */}
-            {(() => {
-              if (!editDraftData) return null;
-              const isDraftRecord =
-                editDraftData.isDraft ||
-                (typeof editDraftData.id === 'string' && editDraftData.id.startsWith('draft_')) ||
-                editDraftData.workflow_status === 'draft' ||
-                editDraftData.workflow_status_id === 1;
 
-              // กรณีเป็น Draft: แสดงปุ่มลบ
-              if (isDraftRecord) {
-                return (
-                  <Button
-                    variant="destructive"
-                    onClick={() => handleDeleteDraft(editDraftId)}
-                    disabled={isSubmitting}
-                    className={`bg-red-600 hover:bg-red-700 text-white ${notoSansThai.className}`}
-                  >
-                    {isSubmitting ? "กำลังลบ..." : "ลบ"}
-                  </Button>
-                );
-              }
-
-              // ถ้าเป็นงานพิมพ์แล้ว ให้แสดงปุ่มยกเลิกงาน
-              const isPrintedRecord = editDraftData.workflow_status === 'printed';
-              if (isPrintedRecord && editDraftData.id) {
-                return (
-                  <Button
-                    variant="destructive"
-                    onClick={() => handleCancelProduction(String(editDraftData.id))}
-                    disabled={isSubmitting}
-                    className={`bg-red-600 hover:bg-red-700 text-white ${notoSansThai.className}`}
-                  >
-                    {isSubmitting ? "กำลังยกเลิก..." : "ยกเลิกงาน"}
-                  </Button>
-                );
-              }
-
-              // ถ้าเป็นงานบันทึกเสร็จสิ้น ให้แสดงปุ่มลบ
-              const isCompletedRecord =
-                editDraftData.workflow_status === 'completed' ||
-                editDraftData.workflow_status_id === 2;
-              if (isCompletedRecord && editDraftData.id) {
-                return (
-                  <Button
-                    variant="destructive"
-                    onClick={() => handleDeleteWorkPlan(String(editDraftData.id))}
-                    disabled={isSubmitting}
-                    className={`bg-red-600 hover:bg-red-700 text-white ${notoSansThai.className}`}
-                  >
-                    {isSubmitting ? "กำลังลบ..." : "ลบ"}
-                  </Button>
-                );
-              }
-
-              return null;
-            })()}
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => handleSaveEditDraft(true)} disabled={isSubmitting} className={notoSansThai.className}>บันทึกแบบร่าง</Button>
-              <Button onClick={() => handleSaveEditDraft(false)} disabled={isSubmitting} className={`bg-green-700 hover:bg-green-800 text-white ${notoSansThai.className}`}>
-                {isSubmitting ? "กำลังบันทึก..." : "บันทึกเสร็จสิ้น"}
-              </Button>
-            </div>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Global Confirmation Modal */}
-      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className={`${notoSansThai.className}`}>{confirmTitle}</DialogTitle>
-          </DialogHeader>
-          <div className="py-2">
-            <p className={`${notoSansThai.className}`}>{confirmMessage}</p>
-          </div>
-          <DialogFooter className="flex gap-2">
-            <Button variant="outline" onClick={handleConfirmNo} className={notoSansThai.className}>ยกเลิก</Button>
-            <Button onClick={handleConfirmYes} className={`bg-red-600 hover:bg-red-700 text-white ${notoSansThai.className}`}>ตกลง</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={showErrorDialog} onOpenChange={setShowErrorDialog}>
-        <DialogContent className={`max-w-xs text-center ${notoSansThai.className}`}>
-          <DialogHeader>
-            <DialogTitle className={notoSansThai.className}>ข้อผิดพลาด</DialogTitle>
-          </DialogHeader>
-          <div className="mb-4">{errorDialogMessage}</div>
-          <DialogFooter>
-            <Button onClick={() => setShowErrorDialog(false)} className={`w-full ${notoSansThai.className}`}>ตกลง</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <PlannerAlertDialog
+        open={showErrorDialog}
+        onOpenChange={setShowErrorDialog}
+        title="ข้อผิดพลาด"
+        message={errorDialogMessage}
+        variant="error"
+        className={notoSansThai.className}
+      />
 
       {/* Dialog สำหรับแสดง popup แจ้งเตือนเมื่อบันทึกเสร็จสิ้น */}
-      <Dialog open={showSuccessDialog} onOpenChange={setShowSuccessDialog}>
-        <DialogContent className={`max-w-xs text-center ${notoSansThai.className}`}>
-          <DialogHeader>
-            <DialogTitle className={`${notoSansThai.className} text-green-600`}>สำเร็จ</DialogTitle>
-          </DialogHeader>
-          <div className="mb-4 text-green-700">{successDialogMessage}</div>
-          <DialogFooter>
-            <Button onClick={() => setShowSuccessDialog(false)} className={`w-full bg-green-600 hover:bg-green-700 text-white ${notoSansThai.className}`}>ตกลง</Button>
-          </DialogFooter>
-        </DialogContent>
-              </Dialog>
+      <PlannerAlertDialog
+        open={showSuccessDialog}
+        onOpenChange={setShowSuccessDialog}
+        title="สำเร็จ"
+        message={successDialogMessage}
+        variant="success"
+        className={notoSansThai.className}
+      />
 
-        {/* Dialog สำหรับถามว่าจะใช้ข้อมูลตามแผนหรือไม่ */}
-        <Dialog open={showAutoFillDialog} onOpenChange={setShowAutoFillDialog}>
-          <DialogContent className={notoSansThai.className}>
-            <DialogHeader>
-              <DialogTitle className="text-green-600">เลือกวิธีการกรอกข้อมูล</DialogTitle>
-            </DialogHeader>
-            <div className="py-4">
-              <div className="mb-4 text-gray-700 font-medium">
-                <p className="font-bold">{pendingJobData?.jobCode} - {pendingJobData?.jobName}</p>
-                <p className="mt-1">กรุณาเลือกรูปแบบการกรอกข้อมูล:</p>
-              </div>
-              
-              {/* Radio Button Options */}
-              <RadioGroup 
-                value={autoFillOption || ''} 
-                onValueChange={(value) => {
-                  const newValue = value as 'latest' | 'best' | 'manual' | null;
-                  setAutoFillOption(newValue);
-                }}
-                className="space-y-3 mb-4"
-              >
-                {/* ข้อมูลประวัติการผลิตย้อนหลัง (disabled) */}
-                <div className="flex items-center space-x-3 opacity-50">
-                  <RadioGroupItem value="best" id="best" disabled />
-                  <label 
-                    htmlFor="best" 
-                    className="text-sm font-medium leading-none cursor-not-allowed flex-1"
-                  >
-                    <div className="text-gray-500">ข้อมูลประวัติการผลิตย้อนหลัง</div>
-                  </label>
-                </div>
-                
-                {/* ข้อมูลตามแผนผลิตครั่งล่าสุด */}
-                <div className="flex items-start space-x-3">
-                  <RadioGroupItem value="latest" id="latest" className="mt-0.5" />
-                  <div className="flex-1">
-                    <label 
-                      htmlFor="latest" 
-                      className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer block"
-                    >
-                      <div className="text-gray-700">ข้อมูลตามแผนผลิตครั่งล่าสุด</div>
-                    </label>
-                    {/* แสดงข้อมูลออกมาเลยเมื่อมีข้อมูล */}
-                    {pendingLatestData && (
-                      <div className="mt-2 ml-0 p-3 bg-gray-50 border border-gray-200 rounded-lg">
-                        <div className="space-y-2 text-sm">
-                          {/* ผู้ปฏิบัติงาน */}
-                          {pendingLatestData.operators && Array.isArray(pendingLatestData.operators) && pendingLatestData.operators.filter((op: string) => op && op !== '').length > 0 && (
-                            <div className="flex items-start gap-2">
-                              <span className="font-semibold text-gray-700 min-w-[100px]">ผู้ปฏิบัติงาน:</span>
-                              <span className="text-gray-800 flex-1">
-                                {pendingLatestData.operators.filter((op: string) => op && op !== '').join(' ')}
-                              </span>
-                            </div>
-                          )}
-                          
-                          {/* เวลา */}
-                          {(pendingLatestData.start_time || pendingLatestData.end_time) && (
-                            <div className="flex items-start gap-2">
-                              <span className="font-semibold text-gray-700 min-w-[100px]">เวลา:</span>
-                              <span className="text-gray-800 flex-1">
-                                {pendingLatestData.start_time ? normalizeTimeForForm(pendingLatestData.start_time) : '--'}
-                                {' - '}
-                                {pendingLatestData.end_time ? normalizeTimeForForm(pendingLatestData.end_time) : '--'}
-                              </span>
-                            </div>
-                          )}
-                          
-                          {/* ห้องผลิต */}
-                          <div className="flex items-start gap-2">
-                            <span className="font-semibold text-gray-700 min-w-[100px]">ห้องผลิต:</span>
-                            <span className="text-gray-800 flex-1">
-                              {pendingLatestData.room_name || pendingLatestData.room_code || 'ไม่มีข้อมูล'}
-                            </span>
-                          </div>
-                          
-                          {/* วันที่ที่ดึงข้อมูลมา */}
-                          {pendingLatestData.production_date && (() => {
-                            const dataDate = createSafeDate(pendingLatestData.production_date);
-                            const today = new Date();
-                            today.setHours(0, 0, 0, 0);
-                            if (dataDate) {
-                              dataDate.setHours(0, 0, 0, 0);
-                              const diffTime = today.getTime() - dataDate.getTime();
-                              const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-                              const formattedDate = formatDateThaiShort(dataDate);
-                              let dayText = '';
-                              if (diffDays === 0) {
-                                dayText = 'วันนี้';
-                              } else if (diffDays === 1) {
-                                dayText = '1 วันที่แล้ว';
-                              } else {
-                                dayText = `${diffDays} วันที่แล้ว`;
-                              }
-                              return (
-                                <div className="flex items-start gap-2 mt-2 pt-2 border-t border-gray-300 text-xs">
-                                  <span className="font-semibold text-gray-700 min-w-[100px]">ข้อมูลจากวันที่:</span>
-                                  <span className="text-gray-800 flex-1">
-                                    {formattedDate} ({dayText})
-                                  </span>
-                                </div>
-                              );
-                            }
-                            return null;
-                          })()}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-                
-                {/* กำหนดข้อมูลด้วยตัวเอง */}
-                <div className="flex items-center space-x-3">
-                  <RadioGroupItem value="manual" id="manual" />
-                  <label 
-                    htmlFor="manual" 
-                    className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer flex-1"
-                  >
-                    <div className="text-gray-700">กำหนดข้อมูลด้วยตัวเอง</div>
-                  </label>
-                </div>
-              </RadioGroup>
-            </div>
-            <DialogFooter>
-              <Button
-                onClick={() => {
-                  if (autoFillOption === 'latest' && pendingJobData && pendingLatestData) {
-                    applyAutoFillData(pendingLatestData, pendingJobData.jobName);
-                  }
-                  setShowAutoFillDialog(false);
-                  setPendingJobData(null);
-                  setPendingLatestData(null);
-                  setAutoFillOption(null); // Reset to null (ยังไม่เลือก)
-                  setExpandedOption(null);
-                }}
-                className="w-full bg-green-600 hover:bg-green-700 text-white focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
-                disabled={autoFillOption === null}
-              >
-                ตกลง
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <AutoFillJobDialog
+          open={showAutoFillDialog}
+          onOpenChange={setShowAutoFillDialog}
+          pendingJobData={pendingJobData}
+          pendingLatestData={pendingLatestData}
+          autoFillOption={autoFillOption}
+          onAutoFillOptionChange={setAutoFillOption}
+          onConfirm={() => {
+            if (autoFillOption === 'latest' && pendingJobData && pendingLatestData) {
+              applyAutoFillData(pendingLatestData, pendingJobData.jobName);
+            }
+            setShowAutoFillDialog(false);
+            setPendingJobData(null);
+            setPendingLatestData(null);
+            setAutoFillOption(null);
+            setExpandedOption(null);
+          }}
+          className={notoSansThai.className}
+        />
 
         {/* Time Table Popup Dialog - ใช้ Component ใหม่ */}
         <TimeTablePopup
@@ -4959,29 +3516,6 @@ export default function MedicalAppointmentDashboard() {
           users={users}
         />
 
-        {/* Time Table Popup Dialog - เก่า (ยังไม่ลบ) */}
-        {/* <Dialog open={showTimeTable} onOpenChange={setShowTimeTable}>
-          <DialogContent className="max-w-7xl max-h-[90vh] overflow-auto">
-            <DialogHeader>
-              <DialogTitle className="flex items-center space-x-2">
-                <Clock className="w-5 h-5 text-green-600" />
-                <span>ตารางเวลาการทำงาน - {formatDateForDisplay(new Date(selectedDate), 'full')}</span>
-              </DialogTitle>
-            </DialogHeader>
-            <div className="mt-4">
-              <TimeTable
-                jobs={getSelectedDayProduction()}
-                users={users}
-                staffImages={staffImages}
-              />
-            </div>
-            <DialogFooter>
-              <Button onClick={() => setShowTimeTable(false)}>
-                ปิด
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog> */}
         </>
       )}
     </div>
