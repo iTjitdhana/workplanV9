@@ -293,13 +293,38 @@ export function EditDraftModal({
                 );
               }
 
-              // ถ้าเป็นงานบันทึกเสร็จสิ้น หรือพิมพ์แล้ว ให้แสดงปุ่มลบ
-              const isCompletedOrPrintedRecord =
-                editDraftData.workflow_status === 'completed' ||
+              // ถ้าเป็นงานพิมพ์แล้ว ให้แสดงปุ่มลบและยกเลิกงาน
+              const isPrintedRecord =
                 editDraftData.workflow_status === 'printed' ||
-                editDraftData.workflow_status_id === 2 ||
                 editDraftData.workflow_status_id === 3;
-              if (isCompletedOrPrintedRecord && editDraftData.id) {
+              if (isPrintedRecord && editDraftData.id) {
+                return (
+                  <div className="flex gap-2">
+                    <Button
+                      variant="destructive"
+                      onClick={() => onDeleteWorkPlan(String(editDraftData.id))}
+                      disabled={isSubmitting}
+                      className={`bg-red-600 hover:bg-red-700 text-white ${cn}`}
+                    >
+                      {isSubmitting ? "กำลังลบ..." : "ลบ"}
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      onClick={() => onCancelProduction(String(editDraftData.id))}
+                      disabled={isSubmitting}
+                      className={`bg-orange-600 hover:bg-orange-700 text-white ${cn}`}
+                    >
+                      {isSubmitting ? "กำลังยกเลิก..." : "ยกเลิกงาน"}
+                    </Button>
+                  </div>
+                );
+              }
+
+              // ถ้าเป็นงานบันทึกเสร็จสิ้น ให้แสดงปุ่มลบ
+              const isCompletedRecord =
+                editDraftData.workflow_status === 'completed' ||
+                editDraftData.workflow_status_id === 2;
+              if (isCompletedRecord && editDraftData.id) {
                 return (
                   <Button
                     variant="destructive"

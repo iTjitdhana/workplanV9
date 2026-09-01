@@ -17,6 +17,7 @@ import {
   RefreshCw,
   Search,
   User as UserIcon,
+  XCircle,
   ChevronDown as ChevronDownIcon,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -3371,6 +3372,16 @@ export default function MedicalAppointmentDashboard() {
                                           >
                                             <Edit className="w-3 h-3" />
                                         </Button>
+                                      {getJobStatus(item) === "พิมพ์แล้ว" && (
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => handleCancelProduction(item.id)}
+                                            className="border-2 border-red-300 text-red-600 hover:bg-red-50 bg-white text-xs font-medium px-2 py-1"
+                                          >
+                                            <XCircle className="w-3 h-3" />
+                                        </Button>
+                                      )}
                                         </>
                                     )}
                                   </div>
